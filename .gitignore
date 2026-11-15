@@ -1,0 +1,16 @@
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.log
+
+# npx skills 安装目录（避免技能文件进入仓库）
+.claude/
+.agents/
+.skills/
+node_modules/

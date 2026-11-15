@@ -1,0 +1,66 @@
+name: Android CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Assemble Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Verify version lock (0.1.0 / 1)
+        run: |
+          set -e
+          grep -qx 'VERSION_NAME=0.1.0' gradle.properties || { echo "::error::VERSION_NAME 必须保持 0.1.0（版本号全程锁定）"; exit 1; }
+          grep -qx 'VERSION_CODE=1' gradle.properties || { echo "::error::VERSION_CODE 必须保持 1（版本号全程锁定）"; exit 1; }
+          echo "版本锁定校验通过：0.1.0 / 1"
+
+      - name: Build debug APK
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --stacktrace --console=plain 2>&1 | tee build.log
+
+      - name: Move latest-ci tag to this commit
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f latest-ci "$GITHUB_SHA"
+          git push --force origin "refs/tags/latest-ci" || true
+
+      - name: Upload APK to latest-ci Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-ci
+          prerelease: true
+          overwrite_files: true
+          files: app/build/outputs/apk/debug/app-debug.apk
+          body: |
+            CI 构建产物（每轮 CI 自动覆盖，同名 APK 直接替换，不保留历史）。
+            构建提交：${{ github.sha }}
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-logs
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 7

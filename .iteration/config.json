@@ -1,0 +1,7 @@
+{
+  "minFeaturesPerRound": 5,
+  "maxFeaturesPerRound": 8,
+  "maxFixAttempts": 3,
+  "cronIntervalHours": 5,
+  "versionLock": "0.1.0"
+}

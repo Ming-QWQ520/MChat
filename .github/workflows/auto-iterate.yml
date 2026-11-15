@@ -1,0 +1,108 @@
+name: Auto Iterate
+
+on:
+  schedule:
+    - cron: '0 */5 * * *' # UTC，每 5 小时整点
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: auto-iterate
+  cancel-in-progress: false
+
+jobs:
+  iterate:
+    name: Feature iteration round
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout main (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Node.js (for npx skills)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify version lock (0.1.0 / 1)
+        run: |
+          set -e
+          if ! grep -qx 'VERSION_NAME=0.1.0' gradle.properties || ! grep -qx 'VERSION_CODE=1' gradle.properties; then
+            echo "::error::版本号被改动（必须保持 0.1.0 / 1），本轮失败并开启 issue"
+            gh issue create --title "[auto-iterate] 版本锁定校验失败，需人工介入" \
+              --body "gradle.properties 中的版本号不符合锁定要求（VERSION_NAME=0.1.0 / VERSION_CODE=1）。" || true
+            exit 1
+          fi
+          echo "版本锁定校验通过"
+
+      - name: Check LLM secrets
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -z "$LLM_API_KEY" ]; then
+            echo "::error::未配置 LLM_API_KEY（Settings → Secrets and variables → Actions）。按设计不降级，本轮终止。"
+            gh issue create --title "[auto-iterate] 缺少 LLM_API_KEY，请配置" \
+              --body "请在仓库 Settings → Secrets and variables → Actions 中配置：
+          - LLM_API_KEY（必填，Anthropic 或兼容中转的 Key）
+          - LLM_BASE_URL（可选，默认 https://api.anthropic.com）
+          - LLM_MODEL（可选，默认 claude-sonnet-4-20250514）
+
+          配置后无需重新触发，下一轮 cron（每 5 小时）自动生效。" || true
+            exit 1
+          fi
+
+      - name: Create rollback tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ROUND_TAG="iter-$(date +%Y%m%d%H%M)"
+          git tag "$ROUND_TAG" || true
+          git push origin "$ROUND_TAG" || true
+          echo "ROUND_TAG=$ROUND_TAG" >> "$GITHUB_ENV"
+
+      - name: Install Kotlin Agent Skills
+        id: skills
+        run: |
+          set +e
+          npx -y skills add Kotlin/kotlin-agent-skills > /tmp/skills_install.log 2>&1
+          STATUS=$?
+          set -e
+          SKILL_FILE=$(find . -name 'SKILL.md' -path '*kotlin*' 2>/dev/null | head -n 1)
+          if [ $STATUS -eq 0 ] && [ -n "$SKILL_FILE" ] && [ -f "$SKILL_FILE" ]; then
+            echo "loaded=true" >> "$GITHUB_OUTPUT"
+            echo "skill_file=$SKILL_FILE" >> "$GITHUB_OUTPUT"
+            echo "Kotlin Agent Skills 加载成功：$SKILL_FILE"
+          else
+            echo "loaded=false" >> "$GITHUB_OUTPUT"
+            echo "Kotlin Agent Skills 加载失败（不阻断迭代，history 中会记录）"
+            tail -n 5 /tmp/skills_install.log || true
+          fi
+
+      - name: Run iteration round (generate / selfcheck / build / review / push / CI loop)
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          chmod +x .iteration/scripts/iterate.sh
+          bash .iteration/scripts/iterate.sh run "$ROUND_TAG" "${{ steps.skills.outputs.loaded }}" "${{ steps.skills.outputs.skill_file }}"
