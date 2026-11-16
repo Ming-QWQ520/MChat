@@ -14,24 +14,24 @@
 - [ ] 消息搜索（全文 + 按会话）（模块：core-data，复杂度：M，参考：Chatbox）
 - [ ] 消息重新生成多候选（模块：feature-chat，复杂度：L，参考：LibreChat）
 - [ ] 消息分享为图片（模块：feature-chat，复杂度：M，参考：NextChat）
-- [ ] 消息长按菜单自定义（模块：feature-chat，复杂度：S，参考：Chatbox）
+- [x] 消息长按菜单自定义（模块：feature-chat，复杂度：S，参考：Chatbox）（commit: 9195b83）
 - [ ] Markdown 增强：表格、任务列表、脚注（模块：feature-chat，复杂度：M，参考：Open WebUI）
 - [ ] LaTeX 数学公式渲染（模块：feature-chat，复杂度：M，参考：NextChat）
 - [ ] Mermaid 图表渲染（模块：feature-chat，复杂度：L，参考：Open WebUI）
 - [ ] 代码块高亮主题切换（模块：feature-chat + core-theme，复杂度：S，参考：Cherry Studio）
 - [ ] 流式打字机音效（可关）（模块：feature-chat，复杂度：S，参考：Jan）
-- [ ] 消息时间戳显示与定位（模块：feature-chat，复杂度：S，参考：Chatbox）
+- [x] 消息时间戳显示与定位（模块：feature-chat，复杂度：S，参考：Chatbox）（commit: 9195b83）
 
 ## 会话管理
 
-- [ ] 会话置顶（模块：feature-history + core-data，复杂度：S，参考：Cherry Studio）
+- [x] 会话置顶（模块：feature-history + core-data，复杂度：S，参考：Cherry Studio）（commit: 9195b83）
 - [ ] 会话归档（模块：feature-history + core-data，复杂度：M，参考：Chatbox）
 - [ ] 会话标签系统（模块：feature-history + core-data，复杂度：M，参考：Lobe Chat）
 - [ ] 会话文件夹分组（模块：feature-history + core-data，复杂度：L，参考：NextChat）
 - [ ] 会话单条导入导出（模块：feature-settings，复杂度：S，参考：Chatbox）
 - [ ] 会话批量删除（模块：feature-history，复杂度：S，参考：Cherry Studio）
 - [ ] 会话拖拽排序（模块：feature-history，复杂度：M，参考：Lobe Chat）
-- [ ] 会话搜索过滤（模块：feature-history，复杂度：S，参考：NextChat）
+- [x] 会话搜索过滤（模块：feature-history，复杂度：S，参考：NextChat）（commit: 9195b83）
 
 ## 输入与交互
 
@@ -61,6 +61,6 @@
 - [ ] 导出会话为 Markdown（模块：feature-settings，复杂度：S，参考：Chatbox）
 - [ ] 导出会话为 PDF（模块：feature-settings + core-attachment，复杂度：M，参考：Cherry Studio）
 - [ ] 导出会话为图片长图（模块：feature-settings，复杂度：M，参考：NextChat）
-- [ ] 分享到其他 App（模块：feature-chat，复杂度：S，参考：Chatbox）
-- [ ] 复制为纯文本/带格式（模块：feature-chat，复杂度：S，参考：Cherry Studio）
+- [x] 分享到其他 App（模块：feature-chat，复杂度：S，参考：Chatbox）（commit: 9195b83）
+- [x] 复制为纯文本/带格式（模块：feature-chat，复杂度：S，参考：Cherry Studio）（commit: 9195b83）
 - [ ] 导出会话为 HTML（模块：feature-settings，复杂度：S，参考：Open WebUI）
