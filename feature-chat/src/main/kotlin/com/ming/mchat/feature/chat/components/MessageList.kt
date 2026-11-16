@@ -1,9 +1,9 @@
 package com.ming.mchat.feature.chat.components
 
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -21,36 +21,47 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,13 +69,22 @@ import com.ming.mchat.core.common.TimeUtils
 import com.ming.mchat.core.data.entity.MessageEntity
 import com.ming.mchat.core.data.entity.Role
 import com.ming.mchat.core.data.entity.UsageSource
+import com.ming.mchat.core.data.datastore.BubbleStyle
+import com.ming.mchat.core.theme.AnchoredContextMenu
+import com.ming.mchat.core.theme.AnchoredMenuItem
+import com.ming.mchat.core.theme.MotionCurves
+import com.ming.mchat.core.theme.MotionDurations
+import com.ming.mchat.core.theme.appSurfaces
+import com.ming.mchat.core.theme.longPressAnchor
 import com.ming.mchat.feature.chat.ChatUiState
+import kotlinx.coroutines.launch
 
 /**
- * 消息列表（DeepSeek 手机端风格）：
- * - 用户消息：右侧主题色气泡；
- * - 助手消息：扁平排版 + DeepSeek 徽标；思考过程折叠卡片（可点击展开）；
- * - 长按消息弹出底部操作菜单：复制 / 选择文本 / 查看原格式 / 重新生成 / 删除。
+ * 消息列表（kelivo 风格）：
+ * - 用户消息：右侧气泡（最大 75% 屏宽），磨砂 / 实底两种风格；
+ * - 助手消息：左侧气泡 + 思考折叠卡（animateContentSize 展开 / 收起）；
+ * - 长按消息：以长按点为中心展开的锚点菜单（自适应上下方向）；
+ * - 用户消息支持“编辑后重发”；最后一条助手消息支持“重新生成”。
  */
 @Composable
 fun MessageList(
@@ -73,30 +93,41 @@ fun MessageList(
     onCopy: (String) -> Unit,
     onDelete: (Long) -> Unit,
     onRegenerate: () -> Unit,
+    onEditResend: (Long, String) -> Unit,
 ) {
-    // 长按操作目标（底部菜单 / 原格式抽屉 / 选择文本对话框）
+    // 长按操作目标（锚点菜单 / 原格式抽屉 / 选择文本 / 编辑对话框）
     var actionTarget by rememberSaveable(state.conversationId) { mutableStateOf<Long?>(null) }
+    var actionPressOffset by remember { mutableStateOf(Offset.Zero) }
     var rawFormatTarget by rememberSaveable(state.conversationId) { mutableStateOf<Long?>(null) }
     var selectTarget by rememberSaveable(state.conversationId) { mutableStateOf<Long?>(null) }
+    var editTarget by rememberSaveable(state.conversationId) { mutableStateOf<Long?>(null) }
 
-    val messages = state.messages
+    val messages = state.displayMessages
     val actionMessage = messages.firstOrNull { it.id == actionTarget }
     val rawMessage = messages.firstOrNull { it.id == rawFormatTarget }
     val selectMessage = messages.firstOrNull { it.id == selectTarget }
+    val editMessage = messages.firstOrNull { it.id == editTarget }
+    val lastAssistantId = messages.lastOrNull { it.role == Role.ASSISTANT }?.id
 
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxWidth(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(messages.size, key = { messages[it].id }) { index ->
             val message = messages[index]
             MessageBubble(
                 message = message,
-                isLastAssistant = message.id == messages.lastOrNull { it.role == Role.ASSISTANT }?.id,
+                isLastAssistant = message.id == lastAssistantId,
                 collapseReasoning = state.collapseReasoning,
-                onLongPress = { actionTarget = message.id },
+                bubbleStyle = state.bubbleStyle,
+                showTimestamp = state.showTimestamp,
+                userName = state.userName,
+                onLongPress = { offset ->
+                    actionTarget = message.id
+                    actionPressOffset = offset
+                },
             )
         }
         if (state.isStreaming) {
@@ -107,14 +138,16 @@ fun MessageList(
         item(key = "bottom_spacer") { Spacer(Modifier.height(4.dp)) }
     }
 
-    // 长按操作菜单（从上到下：复制 / 选择文本 / 查看原格式 / 重新生成）
+    // 长按锚点菜单：以长按点为中心，自适应上下展开
     actionMessage?.let { message ->
-        MessageActionsSheet(
+        MessageActionsMenu(
             message = message,
-            isLastAssistant = message.id == messages.lastOrNull { it.role == Role.ASSISTANT }?.id,
+            isLastAssistant = message.id == lastAssistantId,
+            pressOffset = actionPressOffset,
             onCopy = { onCopy(message.content) },
             onSelectText = { selectTarget = message.id },
             onShowRaw = { rawFormatTarget = message.id },
+            onEdit = { editTarget = message.id },
             onRegenerate = onRegenerate,
             onDelete = { onDelete(message.id) },
             onDismiss = { actionTarget = null },
@@ -137,105 +170,128 @@ fun MessageList(
             onDismiss = { selectTarget = null },
         )
     }
-}
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun MessageBubble(
-    message: MessageEntity,
-    isLastAssistant: Boolean,
-    collapseReasoning: Boolean,
-    onLongPress: () -> Unit,
-) {
-    val isUser = message.role == Role.USER
-    Box(
-        Modifier.fillMaxWidth(),
-        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
-    ) {
-        if (isUser) {
-            Column(
-                horizontalAlignment = Alignment.End,
-                modifier = Modifier
-                    .widthIn(max = 320.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
-                    )
-                    .combinedClickable(onClick = {}, onLongClick = onLongPress)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-            ) {
-                SelectionContainer {
-                    Text(message.content, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        } else {
-            Row(
-                verticalAlignment = Alignment.Top,
-                modifier = Modifier.widthIn(max = 340.dp),
-            ) {
-                AssistantAvatar()
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    // 思考过程（历史消息）：折叠卡片
-                    message.reasoningContent?.takeIf { it.isNotBlank() }?.let { reasoning ->
-                        ReasoningCard(
-                            reasoning = reasoning,
-                            streaming = false,
-                            defaultCollapsed = collapseReasoning,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    MarkdownText(text = message.content)
-                    // Token 明细（估算标记 ≈）
-                    message.totalTokens?.let { total ->
-                        Text(
-                            text = buildString {
-                                append("输入 ${message.promptTokens ?: 0} · 输出 ${message.completionTokens ?: 0} · 共 $total tokens")
-                                if (message.usageSource == UsageSource.ESTIMATED) append("（≈ 估算）")
-                                append(" · ${message.model.orEmpty()}")
-                                message.latencyMs?.let { append(" · %.1fs".format(it / 1000.0)) }
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 6.dp),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** DeepSeek 徽标：圆形品牌蓝底 + 鲸鱼 logo。 */
-@Composable
-private fun AssistantAvatar() {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        modifier = Modifier.size(28.dp),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            androidx.compose.foundation.Image(
-                painter = androidx.compose.ui.res.painterResource(
-                    com.ming.mchat.core.theme.R.drawable.deepseek_logo,
-                ),
-                contentDescription = "DeepSeek",
-                modifier = Modifier.size(22.dp),
+    // 编辑后重发（仅用户消息）
+    editMessage?.let { message ->
+        if (message.role == Role.USER) {
+            EditMessageDialog(
+                initial = message.content,
+                onDismiss = { editTarget = null },
+                onConfirm = { newText ->
+                    editTarget = null
+                    onEditResend(message.id, newText)
+                },
             )
         }
     }
 }
 
+/** 气泡容器配色：磨砂（半透明 + 发丝描边）/ 实底。 */
+@Composable
+private fun bubbleContainer(bubbleStyle: BubbleStyle, isUser: Boolean): androidx.compose.ui.graphics.Color {
+    val scheme = MaterialTheme.colorScheme
+    return when (bubbleStyle) {
+        BubbleStyle.FROSTED -> {
+            val dark = scheme.surface.luminance() < 0.5f
+            if (isUser) scheme.primaryContainer.copy(alpha = 0.78f)
+            else scheme.surface.copy(alpha = if (dark) 0.72f else 0.86f)
+        }
+        BubbleStyle.SOLID -> if (isUser) scheme.primaryContainer else MaterialTheme.appSurfaces.card
+    }
+}
+
+@Composable
+fun MessageBubble(
+    message: MessageEntity,
+    isLastAssistant: Boolean,
+    collapseReasoning: Boolean,
+    bubbleStyle: BubbleStyle,
+    showTimestamp: Boolean,
+    userName: String,
+    onLongPress: (Offset) -> Unit,
+) {
+    val isUser = message.role == Role.USER
+    val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.75f).dp
+    val surfaces = MaterialTheme.appSurfaces
+
+    Box(
+        Modifier.fillMaxWidth(),
+        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
+    ) {
+        Column(horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
+            // 头部：用户名 / 时间戳（气泡外，kelivo 布局）
+            if (showTimestamp) {
+                Text(
+                    buildString {
+                        if (isUser && userName.isNotBlank()) append(userName); append("  ")
+                        append(TimeUtils.formatMessageTime(message.createdAt))
+                    }.trim(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = bubbleContainer(bubbleStyle, isUser),
+                border = if (bubbleStyle == BubbleStyle.FROSTED) {
+                    BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+                } else {
+                    null
+                },
+                modifier = Modifier
+                    .widthIn(max = maxBubbleWidth)
+                    .longPressAnchor(onLongPress),
+            ) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    if (isUser) {
+                        SelectionContainer {
+                            Text(message.content, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    } else {
+                        // 思考过程（历史消息）：折叠卡片
+                        message.reasoningContent?.takeIf { it.isNotBlank() }?.let { reasoning ->
+                            ReasoningCard(
+                                reasoning = reasoning,
+                                streaming = false,
+                                defaultCollapsed = collapseReasoning,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        MarkdownText(text = message.content)
+                    }
+                }
+            }
+            if (!isUser) {
+                // Token 明细（估算标记 ≈）
+                message.totalTokens?.let { total ->
+                    Text(
+                        text = buildString {
+                            append("输入 ${message.promptTokens ?: 0} · 输出 ${message.completionTokens ?: 0} · 共 $total tokens")
+                            if (message.usageSource == UsageSource.ESTIMATED) append("（≈ 估算）")
+                            append(" · ${message.model.orEmpty()}")
+                            message.latencyMs?.let { append(" · %.1fs".format(it / 1000.0)) }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 6.dp, top = 4.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
 /**
- * 思考过程卡片（DeepSeek 手机端风格）：
+ * 思考过程折叠卡片（animateContentSize 展开 / 收起动画，MotionCurves）：
  * - 折叠态：标题行（正在思考… / 已深度思考）+ 灰色思考摘要（最多 2 行）；
  * - 展开态：完整思考内容；
  * - 点击标题行切换；defaultCollapsed=false（设置关闭折叠）时默认展开。
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ReasoningCard(
     reasoning: String,
@@ -243,13 +299,16 @@ fun ReasoningCard(
     defaultCollapsed: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by rememberSaveable(reasoning.hashCode()) { mutableStateOf(!defaultCollapsed) }
+    // 不以内容为 key：流式期间增量更新不会重置用户的展开/收起操作
+    var expanded by rememberSaveable { mutableStateOf(!defaultCollapsed) }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MaterialTheme.appSurfaces.surfaceFill,
         shape = RoundedCornerShape(12.dp),
         modifier = modifier
             .fillMaxWidth()
-            .animateContentSize(),
+            .animateContentSize(
+                animationSpec = tween(MotionDurations.CONTENT, easing = MotionCurves.EaseOutCubic),
+            ),
     ) {
         Column {
             Row(
@@ -292,7 +351,7 @@ fun ReasoningCard(
                     )
                 }
             } else if (reasoning.isNotBlank()) {
-                // 折叠时仍可见思考内容摘要（DeepSeek 端样式）
+                // 折叠时仍可见思考内容摘要
                 Text(
                     reasoning.replace(Regex("\\s+"), " ").trim(),
                     style = MaterialTheme.typography.bodySmall,
@@ -309,72 +368,85 @@ fun ReasoningCard(
 }
 
 /**
- * 长按消息底部操作菜单：从上到下依次为 复制 / 选择文本 / 查看原格式 / 重新生成 / 删除。
- * - 复制：整段 Markdown 原文；
- * - 选择文本：选择格式化（去 Markdown 符号）后的文本；
- * - 查看原格式：底部抽屉展示原始 Markdown 源码；
- * - 重新生成：仅最后一条助手消息。
+ * 长按消息锚点菜单：以长按点为中心展开，自适应上下方向。
+ * 菜单项：复制 / 选择文本 / 查看原格式 / 编辑重发（用户消息）/ 重新生成（最后一条助手）/ 删除。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MessageActionsSheet(
+fun MessageActionsMenu(
     message: MessageEntity,
     isLastAssistant: Boolean,
+    pressOffset: Offset,
     onCopy: () -> Unit,
     onSelectText: () -> Unit,
     onShowRaw: () -> Unit,
+    onEdit: () -> Unit,
     onRegenerate: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    AnchoredContextMenu(
+        pressRootOffset = pressOffset,
+        onDismiss = onDismiss,
+    ) {
         Text(
             "${TimeUtils.formatMessageTime(message.createdAt)} · ${message.model ?: if (message.role == Role.USER) "你" else "MChat"}",
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 4.dp),
         )
-        ListItem(
-            headlineContent = { Text("复制") },
-            supportingContent = { Text("复制整段 Markdown 原文") },
-            leadingContent = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.clickable { onDismiss(); onCopy() },
-        )
-        ListItem(
-            headlineContent = { Text("选择文本") },
-            supportingContent = { Text("选择格式化后的可读文本") },
-            leadingContent = { Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = null) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.clickable { onDismiss(); onSelectText() },
-        )
-        ListItem(
-            headlineContent = { Text("查看原格式") },
-            supportingContent = { Text("查看原始 Markdown 输出") },
-            leadingContent = { Icon(Icons.Filled.Visibility, contentDescription = null) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.clickable { onDismiss(); onShowRaw() },
-        )
-        if (message.role != Role.USER && isLastAssistant) {
-            ListItem(
-                headlineContent = { Text("重新生成") },
-                supportingContent = { Text("基于上一条提问重新回答") },
-                leadingContent = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier.clickable { onDismiss(); onRegenerate() },
-            )
+        AnchoredMenuItem(Icons.Filled.ContentCopy, "复制") { onDismiss(); onCopy() }
+        AnchoredMenuItem(Icons.AutoMirrored.Filled.Notes, "选择文本") { onDismiss(); onSelectText() }
+        AnchoredMenuItem(Icons.Filled.Visibility, "查看原格式") { onDismiss(); onShowRaw() }
+        if (message.role == Role.USER) {
+            AnchoredMenuItem(Icons.Filled.Edit, "编辑后重发") { onDismiss(); onEdit() }
         }
-        ListItem(
-            headlineContent = { Text("删除", color = MaterialTheme.colorScheme.error) },
-            supportingContent = { Text("删除这条消息") },
-            leadingContent = {
-                Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-            },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.clickable { onDismiss(); onDelete() },
-        )
-        Spacer(Modifier.height(18.dp))
+        if (message.role != Role.USER && isLastAssistant) {
+            AnchoredMenuItem(Icons.Filled.Refresh, "重新生成") { onDismiss(); onRegenerate() }
+        }
+        AnchoredMenuItem(Icons.Filled.Delete, "删除", danger = true) { onDismiss(); onDelete() }
+        Spacer(Modifier.height(6.dp))
     }
+}
+
+/** 编辑后重发对话框：修改用户消息内容并重新提问。 */
+@Composable
+fun EditMessageDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by rememberSaveable { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("编辑后重发") },
+        text = {
+            Column {
+                Text(
+                    "保存后会删除这条消息之后的所有回复，并基于新内容重新提问。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 8,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (text.isNotBlank()) onConfirm(text) }, enabled = text.isNotBlank()) {
+                Text("重发")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 /** 查看原格式：底部抽屉显示原始 Markdown 源码（等宽 + 水平滚动 + 复制）。 */
@@ -465,13 +537,18 @@ fun SelectTextSheet(
 /** 流式中的助手消息：思考折叠卡 + 打字光标 + ≈ token。 */
 @Composable
 fun StreamingBubble(state: ChatUiState) {
-    Row(
-        verticalAlignment = Alignment.Top,
-        modifier = Modifier.widthIn(max = 340.dp),
+    val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.75f).dp
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = bubbleContainer(state.bubbleStyle, isUser = false),
+        border = if (state.bubbleStyle == BubbleStyle.FROSTED) {
+            BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+        } else {
+            null
+        },
+        modifier = Modifier.widthIn(max = maxBubbleWidth),
     ) {
-        AssistantAvatar()
-        Spacer(Modifier.width(10.dp))
-        Column {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             if (state.streamingReasoning.isNotBlank()) {
                 ReasoningCard(
                     reasoning = state.streamingReasoning,
@@ -495,6 +572,111 @@ fun StreamingBubble(state: ChatUiState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp),
             )
+        }
+    }
+}
+
+/**
+ * 滚动导航按钮（kelivo ScrollNavigationButtons）：
+ * - 回到底部（不在底部时显示）；
+ * - 跳转到上一条提问；
+ * 玻璃圆钮，220ms EaseOutCubic 缩放 + 淡入淡出。
+ */
+@Composable
+fun ScrollNavButtons(
+    listState: LazyListState,
+    atBottom: Boolean,
+    hasMessages: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    isUserIndex: (Int) -> Boolean = { false },
+) {
+    if (!enabled || !hasMessages) return
+    val scope = rememberCoroutineScope()
+    val scheme = MaterialTheme.colorScheme
+    val dark = scheme.surface.luminance() < 0.5f
+
+    // 上一条提问的位置：从当前首个可见项向上找最近一条 USER 消息
+    val listState0 = listState
+    fun jumpToPreviousQuestion() {
+        val info = listState0.layoutInfo
+        val firstVisible = info.visibleItemsInfo.firstOrNull()?.index ?: return
+        val target = (firstVisible - 1).downTo(0).firstOrNull { idx -> isUserIndex(idx) } ?: return
+        scope.launch { listState0.animateScrollToItem(target) }
+    }
+
+    Column(
+        modifier.padding(end = 16.dp, bottom = 12.dp),
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        GlassCircleButton(
+            visible = !atBottom,
+            icon = Icons.Filled.KeyboardArrowUp,
+            contentDescription = "上一条提问",
+            dark = dark,
+        ) { jumpToPreviousQuestion() }
+        GlassCircleButton(
+            visible = !atBottom,
+            icon = Icons.Filled.KeyboardArrowDown,
+            contentDescription = "回到底部",
+            dark = dark,
+        ) {
+            scope.launch {
+                val total = listState0.layoutInfo.totalItemsCount
+                if (total > 0) listState0.animateScrollToItem(total - 1)
+            }
+        }
+    }
+}
+
+/** 玻璃圆钮（kelivo _ScrollButton）：BackdropFilter 不可用于列表项，使用半透明 + 描边近似。 */
+@Composable
+private fun GlassCircleButton(
+    visible: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    dark: Boolean,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val scale by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (visible) 1f else 0.9f,
+        animationSpec = tween(MotionDurations.TACTILE, easing = MotionCurves.EaseOutCubic),
+        label = "navScale",
+    )
+    val alpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(MotionDurations.TACTILE, easing = MotionCurves.EaseOutCubic),
+        label = "navAlpha",
+    )
+    Box(
+        Modifier.graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            this.alpha = alpha
+        },
+    ) {
+        Surface(
+            onClick = onClick,
+            enabled = visible,
+            shape = CircleShape,
+            color = if (dark) scheme.surface.copy(alpha = 0.55f) else scheme.surface.copy(alpha = 0.65f),
+            border = BorderStroke(
+                0.5.dp,
+                if (dark) scheme.onSurface.copy(alpha = 0.12f) else scheme.outline.copy(alpha = 0.2f),
+            ),
+            shadowElevation = 2.dp,
+            modifier = Modifier.size(34.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    icon,
+                    contentDescription = contentDescription,
+                    modifier = Modifier.size(18.dp),
+                    tint = scheme.onSurface.copy(alpha = 0.87f),
+                )
+            }
         }
     }
 }

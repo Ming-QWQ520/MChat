@@ -117,6 +117,12 @@ class SettingsViewModel @Inject constructor(
         settingsRepository.title.stateIn(viewModelScope, SharingStarted.Eagerly, TitleSettings())
     val attachment: StateFlow<AttachmentSettings> =
         settingsRepository.attachment.stateIn(viewModelScope, SharingStarted.Eagerly, AttachmentSettings())
+    val userProfile: StateFlow<com.ming.mchat.core.data.datastore.UserProfileSettings> =
+        settingsRepository.userProfile.stateIn(viewModelScope, SharingStarted.Eagerly, com.ming.mchat.core.data.datastore.UserProfileSettings())
+    val chatDisplay: StateFlow<com.ming.mchat.core.data.datastore.ChatDisplaySettings> =
+        settingsRepository.chatDisplay.stateIn(viewModelScope, SharingStarted.Eagerly, com.ming.mchat.core.data.datastore.ChatDisplaySettings())
+    val customQuickPhrases: StateFlow<List<String>> =
+        settingsRepository.quickPhrases.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val providers: StateFlow<List<ProviderConfigEntity>> =
         providerRepository.observeProviders().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -184,6 +190,16 @@ class SettingsViewModel @Inject constructor(
     fun setPromptSafety(value: PromptSafetySettings) = viewModelScope.launch { settingsRepository.setPromptSafety(value) }
     fun setTitle(value: TitleSettings) = viewModelScope.launch { settingsRepository.setTitle(value) }
     fun setAttachment(value: AttachmentSettings) = viewModelScope.launch { settingsRepository.setAttachment(value) }
+    fun setUserProfile(value: com.ming.mchat.core.data.datastore.UserProfileSettings) = viewModelScope.launch { settingsRepository.setUserProfile(value) }
+    fun setChatDisplay(value: com.ming.mchat.core.data.datastore.ChatDisplaySettings) = viewModelScope.launch { settingsRepository.setChatDisplay(value) }
+    fun addQuickPhrase(phrase: String) = viewModelScope.launch {
+        val trimmed = phrase.trim()
+        if (trimmed.isEmpty()) return@launch
+        settingsRepository.setQuickPhrases(settingsRepository.quickPhrases.first() + trimmed)
+    }
+    fun removeQuickPhrase(phrase: String) = viewModelScope.launch {
+        settingsRepository.setQuickPhrases(settingsRepository.quickPhrases.first() - phrase)
+    }
 
     /** 设置自定义聊天背景：解码 → 长边压到 2048 → 存私有目录 JPEG，路径写入 DataStore。 */
     fun setBackgroundImage(uri: Uri) {

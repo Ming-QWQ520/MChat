@@ -5,10 +5,10 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,10 +16,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.ModeComment
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -67,12 +69,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ming.mchat.core.common.ChatBackground
 import com.ming.mchat.core.data.entity.Role
+import com.ming.mchat.core.theme.AnchoredContextMenu
+import com.ming.mchat.core.theme.AnchoredMenuItem
 import com.ming.mchat.core.theme.LocalLiquidGlass
-import com.ming.mchat.core.theme.glassBackdrop
 import com.ming.mchat.core.theme.liquidGlass
 import com.ming.mchat.feature.chat.components.ChatBottomArea
 import com.ming.mchat.feature.chat.components.ContextRingDetailPopup
 import com.ming.mchat.feature.chat.components.MessageList
+import com.ming.mchat.feature.chat.components.ScrollNavButtons
 import com.ming.mchat.feature.history.HistoryDrawerContent
 import com.ming.mchat.feature.history.ModelPickerSheet
 import com.ming.mchat.feature.history.RenameConversationDialog
@@ -80,11 +84,12 @@ import java.io.File
 import kotlinx.coroutines.launch
 
 /**
- * 聊天页（DeepSeek 手机端风格）：历史抽屉 + 消息列表 + 悬浮输入区。
- * - 空会话时展示居中欢迎页（logo + 问候语）；
- * - 顶栏：菜单 / 会话标题（点击重命名）/ 新建对话；
+ * 聊天页（kelivo 风格）：
+ * - 顶栏：菜单 / 用户头像 + 会话标题 + 模型副标题（点击切换模型）/ 临时对话 + 新建；
+ * - 历史抽屉（75% 宽）+ 消息列表 + 悬浮输入区（快捷短语）；
  * - 流式输出时仅在用户停留于底部才自动跟随滚动，上滑阅读历史不受打断；
- * - 聊天背景支持纯色 / 主题渐变 / 自定义图片（设置中配置）。
+ * - 滚动导航按钮：回到底部 / 上一条提问（不在底部时出现）；
+ * - 聊天背景支持纯色 / 主题渐变 / 自定义图片。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,6 +131,7 @@ fun ChatScreen(
     LaunchedEffect(state.providerId) { viewModel.refreshBalance() }
 
     // 用户是否停留在列表底部：上滑阅读历史时暂停自动跟随，回到底部自动恢复
+    val displayMessages = state.displayMessages
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
@@ -135,22 +141,22 @@ fun ChatScreen(
     }
 
     // 切换会话后直接定位到底部（无动画）
-    LaunchedEffect(state.conversationId) {
-        if (state.messages.isNotEmpty()) {
-            listState.scrollToItem(state.messages.size - 1)
+    LaunchedEffect(state.conversationId, state.isTemporary) {
+        if (displayMessages.isNotEmpty()) {
+            listState.scrollToItem(displayMessages.size - 1)
         }
     }
 
     // 用户发送新消息：始终滚动到底部
-    LaunchedEffect(state.messages.size) {
-        val msgs = state.messages
+    LaunchedEffect(displayMessages.size) {
+        val msgs = displayMessages
         if (msgs.isNotEmpty() && msgs.last().role == Role.USER) {
             listState.animateScrollToItem(msgs.size - 1)
         }
     }
 
-    // 流式输出：仅在用户位于底部时跟随（ViewModel 已按 ~90ms 节流刷新，此处的触发频率与之一致）
-    LaunchedEffect(state.streamingContent.length) {
+    // 跟随输出滚动：流式输出且用户位于底部时，平滑跟随新内容
+    LaunchedEffect(state.streamingContent.length, state.streamingReasoning.length) {
         if (state.isStreaming && isAtBottom) {
             val total = listState.layoutInfo.totalItemsCount
             if (total > 0) runCatching { listState.scrollToItem(total - 1) }
@@ -175,7 +181,7 @@ fun ChatScreen(
             // 历史抽屉：始终使用不透明背景，聊天背景图不会透入抽屉
             HistoryDrawerContent(
                 modifier = Modifier
-                    .fillMaxWidth(0.84f)
+                    .fillMaxWidth(0.75f)
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(0.dp),
                 currentProviderId = state.providerId,
@@ -190,6 +196,9 @@ fun ChatScreen(
                         isPinned = it.isPinned,
                     )
                 },
+                userName = state.userName.ifBlank { "我" },
+                userAvatarEmoji = state.userAvatarEmoji,
+                isTemporary = state.isTemporary,
                 onNewChat = {
                     scope.launch { keyboard?.hide(); drawerState.close(); viewModel.newConversation() }
                 },
@@ -198,7 +207,13 @@ fun ChatScreen(
                 },
                 onRenameConversation = { id, title -> viewModel.renameConversation(id, title) },
                 onDeleteConversation = { id -> viewModel.deleteConversation(id) },
+                onDuplicateConversation = { id -> viewModel.duplicateConversation(id) },
+                onBatchDelete = { ids -> viewModel.deleteConversations(ids) },
+                onBatchPin = { ids, pinned -> viewModel.setPinnedMany(ids, pinned) },
                 onPinConversation = { id, pinned -> viewModel.setPinned(id, pinned) },
+                onToggleTemporary = {
+                    scope.launch { keyboard?.hide(); drawerState.close(); viewModel.toggleTemporary() }
+                },
                 onOpenModelPicker = { showModelPicker = true },
                 onOpenSettings = {
                     scope.launch { keyboard?.hide(); drawerState.close() }
@@ -207,149 +222,183 @@ fun ChatScreen(
             )
         },
     ) {
-        val drawerOpen = drawerState.targetValue == DrawerValue.Open
         Box(
             Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface)
         ) {
-            // 聊天背景：自定义图片 / 主题渐变 / 纯色
-            val backgroundImage = File(state.backgroundImageUri)
-            if (state.chatBackground == ChatBackground.IMAGE && state.backgroundImageUri.isNotBlank() && backgroundImage.exists()) {
-                AsyncImage(
-                    model = backgroundImage,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
+                // 聊天背景：自定义图片 / 主题渐变 / 纯色
+                val backgroundImage = File(state.backgroundImageUri)
+                if (state.chatBackground == ChatBackground.IMAGE && state.backgroundImageUri.isNotBlank() && backgroundImage.exists()) {
+                    AsyncImage(
+                        model = backgroundImage,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.38f),
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                                    )
+                                )
+                            )
+                    )
+                } else if (state.chatBackground == ChatBackground.GRADIENT) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.surface,
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                                        MaterialTheme.colorScheme.surface,
+                                    )
+                                )
+                            )
+                    )
+                }
+                Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                )
-                // 遮罩：保证消息与输入区可读性
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.38f),
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                                )
-                            )
+                    containerColor = Color.Transparent,
+                    snackbarHost = { SnackbarHost(snackbarHostState) },
+                    topBar = {
+                        TopAppBar(
+                            modifier = if (glass.enabled) Modifier.liquidGlass(RectangleShape) else Modifier,
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = Color.Transparent,
+                            ),
+                            navigationIcon = {
+                                IconButton(onClick = { scope.launch { keyboard?.hide(); drawerState.open() } }) {
+                                    Icon(Icons.Filled.Menu, contentDescription = "打开历史抽屉")
+                                }
+                            },
+                            title = {
+                                Column(
+                                    Modifier
+                                        .padding(start = 4.dp)
+                                        .clickable(enabled = state.conversationId != 0L && !state.isTemporary) {
+                                            if (state.conversationId != 0L) showRename = true
+                                        },
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        // 用户头像（点击打开抽屉，长按打开资料设置）
+                                        Text(
+                                            state.userAvatarEmoji,
+                                            fontSize = androidx.compose.ui.unit.TextUnit(
+                                                18f,
+                                                androidx.compose.ui.unit.TextUnitType.Sp,
+                                            ),
+                                        )
+                                        Spacer(Modifier.size(6.dp))
+                                        Text(
+                                            if (state.isTemporary) "临时对话" else state.title,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    Text(
+                                        state.modelDisplayName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            },
+                            actions = {
+                                // 临时对话开关（kelivo MessageCircleDashed）
+                                IconButton(onClick = { viewModel.toggleTemporary() }) {
+                                    Icon(
+                                        if (state.isTemporary) Icons.Filled.ChatBubbleOutline else Icons.Filled.ChatBubbleOutline,
+                                        contentDescription = if (state.isTemporary) "退出临时对话" else "进入临时对话",
+                                        tint = if (state.isTemporary) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                // 新建对话
+                                IconButton(onClick = {
+                                    scope.launch { keyboard?.hide(); viewModel.newConversation() }
+                                }) {
+                                    Icon(Icons.Filled.ModeComment, contentDescription = "新建对话")
+                                }
+                            },
                         )
-                )
-            } else if (state.chatBackground == ChatBackground.GRADIENT) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.surface,
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
-                                    MaterialTheme.colorScheme.surface,
-                                )
-                            )
-                        )
-                )
-            }
-            Scaffold(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .glassBackdrop(active = drawerOpen && glass.enabled && !glass.reduceMotion),
-                containerColor = Color.Transparent,
-                snackbarHost = { SnackbarHost(snackbarHostState) },
-                topBar = {
-                    TopAppBar(
-                        modifier = if (glass.enabled) Modifier.liquidGlass(RectangleShape) else Modifier,
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = Color.Transparent,
-                        ),
-                        navigationIcon = {
-                            IconButton(onClick = { scope.launch { keyboard?.hide(); drawerState.open() } }) {
-                                Icon(Icons.Filled.Menu, contentDescription = "打开历史抽屉")
-                            }
-                        },
-                        title = {
-                            Column(
-                                Modifier
-                                    .padding(start = 4.dp)
-                                    .clickable { if (state.conversationId != 0L) showRename = true },
-                            ) {
-                                Text(
-                                    state.title,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    state.modelDisplayName,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        },
-                        actions = {
-                            IconButton(onClick = { scope.launch { keyboard?.hide(); viewModel.newConversation() } }) {
-                                Icon(Icons.Filled.Add, contentDescription = "新建对话")
-                            }
-                        },
-                    )
-                },
-                bottomBar = {
-                    ChatBottomArea(
-                        state = state,
-                        onInputChange = viewModel::onInputChange,
-                        onSend = viewModel::send,
-                        onStop = viewModel::stop,
-                        onPickImages = {
-                            imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        },
-                        onPickDocuments = { documentPicker.launch(arrayOf("text/*", "application/pdf")) },
-                        onRemoveAttachment = viewModel::removeAttachment,
-                        onContextRingClick = { showRingDetail = true },
-                        onModelChipClick = { showModelPicker = true },
-                        onReasoningEffortChange = viewModel::setReasoningEffort,
-                        onDismissLowBalance = viewModel::dismissLowBalance,
-                        glassEnabled = glass.enabled,
-                    )
-                },
-            ) { padding ->
-                Box(Modifier.fillMaxSize().padding(padding)) {
-                    if (state.messages.isEmpty() && !state.isStreaming) {
-                        EmptyChatWelcome(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 40.dp),
-                        )
-                    } else {
-                        MessageList(
+                    },
+                    bottomBar = {
+                        ChatBottomArea(
                             state = state,
-                            listState = listState,
-                            onCopy = { clipboard.setText(AnnotatedString(it)) },
-                            onDelete = viewModel::deleteMessage,
-                            onRegenerate = viewModel::regenerate,
+                            onInputChange = viewModel::onInputChange,
+                            onSend = viewModel::send,
+                            onStop = viewModel::stop,
+                            onPickImages = {
+                                imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                            onPickDocuments = { documentPicker.launch(arrayOf("text/*", "application/pdf")) },
+                            onRemoveAttachment = viewModel::removeAttachment,
+                            onContextRingClick = { showRingDetail = true },
+                            onModelChipClick = { showModelPicker = true },
+                            onReasoningEffortChange = viewModel::setReasoningEffort,
+                            onDismissLowBalance = viewModel::dismissLowBalance,
+                            onQuickPhrase = viewModel::applyQuickPhrase,
+                            glassEnabled = glass.enabled,
                         )
-                    }
-                    if (showRingDetail) {
-                        Popup(
-                            alignment = Alignment.BottomStart,
-                            onDismissRequest = { showRingDetail = false },
-                            properties = PopupProperties(focusable = true),
-                        ) {
-                            ContextRingDetailPopup(
-                                usedTokens = state.usedPromptTokens,
-                                contextWindow = state.contextWindow,
-                                estimated = state.contextEstimated,
-                                balance = state.balance,
-                                showBalance = state.isDeepSeek,
-                                onDismiss = { showRingDetail = false },
+                    },
+                ) { padding ->
+                    Box(Modifier.fillMaxSize().padding(padding)) {
+                        if (displayMessages.isEmpty() && !state.isStreaming) {
+                            EmptyChatWelcome(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 40.dp),
+                                userName = state.userName,
+                                avatarEmoji = state.userAvatarEmoji,
                             )
+                        } else {
+                            MessageList(
+                                state = state,
+                                listState = listState,
+                                onCopy = { clipboard.setText(AnnotatedString(it)) },
+                                onDelete = viewModel::deleteMessage,
+                                onRegenerate = viewModel::regenerate,
+                                onEditResend = viewModel::editAndResend,
+                            )
+                        }
+                        // 滚动导航按钮（不在底部时显示）
+                        ScrollNavButtons(
+                            listState = listState,
+                            atBottom = isAtBottom,
+                            hasMessages = displayMessages.isNotEmpty(),
+                            enabled = state.showNavButtons,
+                            isUserIndex = { idx -> idx in displayMessages.indices && displayMessages[idx].role == Role.USER },
+                            modifier = Modifier.align(Alignment.BottomEnd),
+                        )
+                        if (showRingDetail) {
+                            Popup(
+                                alignment = Alignment.BottomStart,
+                                onDismissRequest = { showRingDetail = false },
+                                properties = PopupProperties(focusable = true),
+                            ) {
+                                ContextRingDetailPopup(
+                                    usedTokens = state.usedPromptTokens,
+                                    contextWindow = state.contextWindow,
+                                    estimated = state.contextEstimated,
+                                    balance = state.balance,
+                                    showBalance = state.isDeepSeek,
+                                    onDismiss = { showRingDetail = false },
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
     }
 
     if (showModelPicker) {
@@ -400,40 +449,40 @@ fun ChatScreen(
 }
 
 /**
- * 空会话欢迎页（DeepSeek 风格）：居中 logo + 问候语 + 副标题。
+ * 空会话欢迎页（kelivo 风格）：居中头像 + 问候语 + 副标题。
  */
 @Composable
-private fun EmptyChatWelcome(modifier: Modifier = Modifier) {
+private fun EmptyChatWelcome(
+    modifier: Modifier = Modifier,
+    userName: String,
+    avatarEmoji: String,
+) {
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Surface(
-            shape = RoundedCornerShape(28.dp),
+            shape = CircleShape,
             color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(84.dp),
-            shadowElevation = if (isSystemInDarkTheme()) 0.dp else 2.dp,
+            modifier = Modifier.size(76.dp),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                androidx.compose.foundation.Image(
-                    painter = androidx.compose.ui.res.painterResource(
-                        com.ming.mchat.core.theme.R.drawable.deepseek_logo,
-                    ),
-                    contentDescription = "DeepSeek",
-                    modifier = Modifier.size(64.dp),
+                Text(
+                    avatarEmoji,
+                    fontSize = androidx.compose.ui.unit.TextUnit(34f, androidx.compose.ui.unit.TextUnitType.Sp),
                 )
             }
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
         Text(
-            "你好，我能帮什么忙吗？",
+            if (userName.isBlank()) "你好，我能帮什么忙吗？" else "你好，$userName！我能帮什么忙吗？",
             style = MaterialTheme.typography.headlineSmall,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "MChat · DeepSeek 驱动的 AI 助手",
+            "MChat · 本地优先的 AI 助手",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

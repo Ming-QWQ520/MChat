@@ -1,124 +1,96 @@
 package com.ming.mchat.core.llm
 
-import com.google.gson.Gson
+import com.aallam.openai.api.chat.ChatMessage
+import com.aallam.openai.api.chat.Effort
+import com.aallam.openai.api.chat.ImagePart
+import com.aallam.openai.api.chat.TextContent
+import com.aallam.openai.api.chat.TextPart
+import com.aallam.openai.api.chat.ListContent
+import com.aallam.openai.api.chat.StreamOptions
+import com.aallam.openai.api.chat.chatCompletionRequest
+import com.aallam.openai.api.exception.OpenAIAPIException
+import com.aallam.openai.api.exception.OpenAIException
+import com.aallam.openai.api.exception.OpenAIHttpException
+import com.aallam.openai.api.model.ModelId
+import com.aallam.openai.client.OpenAI
 import com.ming.mchat.core.common.OutputTokenMode
 import com.ming.mchat.core.common.ReasoningEffortLevel
 import com.ming.mchat.core.data.entity.ModelConfigEntity
+import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.network.sockets.SocketTimeoutException
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpStatusCode
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import okhttp3.sse.EventSource
-import okhttp3.sse.EventSourceListener
-import okhttp3.sse.EventSources
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * 统一聊天服务：OkHttp + okhttp-sse 原生实现（不依赖任何 OpenAI SDK）。
- * - 流式：EventSource 桥接 channelFlow；usage 从最后一个 chunk 捕获；
- * - 取消：收集协程取消时 awaitClose 关闭 EventSource；CancellationException 不被吞掉；
- * - 思考模式：reasoning_effort 对齐 DeepSeek 取值（none/low/high/max）。
+ * 统一聊天服务：基于 openai-kotlin（Ktor + OkHttp 引擎）。
+ * - 流式：[OpenAI.chatCompletions] 返回 Flow<ChatCompletionChunk>，逐事件映射为 [LlmStreamEvent]，
+ *   SSE 解析完全由库完成，无手写解析；
+ * - 取消：收集协程取消时 Ktor 请求同步取消，CancellationException 不被吞掉；
+ * - 思考模式：reasoning_effort 对齐 DeepSeek 取值（none/low/high/max，[Effort] 为值类可承载任意取值）；
+ * - reasoning_content：openai-kotlin ChatDelta 原生字段；
+ * - 错误：OpenAIAPIException 携带 HTTP 状态码与 Provider 错误详情，不吞 400/413。
  */
 @Singleton
 class ChatService @Inject constructor(
-    private val httpClient: LlmHttpClient,
+    private val clientFactory: OpenAiClientFactory,
+    private val auxHttp: AuxHttpClient,
 ) {
 
-    private val gson = Gson()
+    private val json = Json { ignoreUnknownKeys = true }
 
-    fun streamChat(params: StreamChatParams): Flow<LlmStreamEvent> = channelFlow {
-        val body = buildRequestBody(params, stream = true)
-        val request = Request.Builder()
-            .url(joinUrl(params.baseUrl, "/chat/completions"))
-            .header("Authorization", "Bearer ${params.token}")
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .post(body)
-            .build()
+    fun streamChat(params: StreamChatParams): Flow<LlmStreamEvent> {
+        val openAI = clientFactory.client(params.providerId, params.baseUrl, params.token)
+        val request = buildRequest(params, stream = true)
 
-        var lastUsage: ChatUsage? = null
-        var finishReason: String? = null
-        var emitted = false
-
-        fun emitUsageOnce() {
-            lastUsage?.let { u ->
-                trySend(
-                    LlmStreamEvent.Usage(
-                        promptTokens = u.promptTokens,
-                        completionTokens = u.completionTokens,
-                        totalTokens = u.totalTokens,
-                        cacheHitTokens = u.promptCacheHitTokens,
-                        reasoningTokens = u.reasoningTokens,
-                    )
-                )
-            }
-        }
-
-        val listener = object : EventSourceListener() {
-            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                if (data == "[DONE]") {
-                    emitUsageOnce()
-                    trySend(LlmStreamEvent.Done(finishReason))
-                    emitted = true
-                    eventSource.cancel()
-                    close()
-                    return
-                }
-                val chunk = runCatching { gson.fromJson(data, StreamChunk::class.java) }.getOrNull() ?: return
-                chunk.usage?.let { lastUsage = it }
-                chunk.choices.firstOrNull()?.let { choice ->
-                    choice.delta?.content?.takeIf { it.isNotEmpty() }?.let { trySend(LlmStreamEvent.Delta(it)) }
-                    choice.delta?.reasoningContent?.takeIf { it.isNotEmpty() }?.let { trySend(LlmStreamEvent.Reasoning(it)) }
-                    choice.finishReason?.let { finishReason = it }
-                }
-            }
-
-            override fun onClosed(eventSource: EventSource) {
-                // 兼容未发送 [DONE] 的端点：正常关闭也补发 usage + Done（不重复发）
-                if (!emitted) {
-                    emitUsageOnce()
-                    trySend(LlmStreamEvent.Done(finishReason))
-                }
-                close()
-            }
-
-            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                if (emitted) {
-                    close()
-                    return
-                }
-                if (response != null) {
-                    val text = runCatching { response.body?.string() }.getOrNull()
-                    trySend(
-                        LlmStreamEvent.Error(
-                            statusCode = response.code,
-                            message = ErrorCodeMapper.describe(response.code, parseServerMessage(text)),
+        return flow {
+            var finishReason: String? = null
+            try {
+                openAI.chatCompletions(request).collect { chunk ->
+                    // usage 出现在最后一个 chunk（stream_options.include_usage）
+                    chunk.usage?.let { usage ->
+                        emit(
+                            LlmStreamEvent.Usage(
+                                promptTokens = usage.promptTokens ?: 0,
+                                completionTokens = usage.completionTokens ?: 0,
+                                totalTokens = usage.totalTokens ?: 0,
+                            )
                         )
-                    )
-                } else {
-                    trySend(LlmStreamEvent.Error(message = ErrorCodeMapper.describeNetworkError(t?.message)))
+                    }
+                    chunk.choices.firstOrNull()?.let { choice ->
+                        choice.delta?.content?.takeIf { it.isNotEmpty() }?.let { emit(LlmStreamEvent.Delta(it)) }
+                        choice.delta?.reasoningContent?.takeIf { it.isNotEmpty() }?.let { emit(LlmStreamEvent.Reasoning(it)) }
+                        choice.delta?.toolCalls?.takeIf { it.isNotEmpty() }?.let { emit(LlmStreamEvent.ToolCallDelta(it.size)) }
+                        choice.finishReason?.let { finishReason = it.value }
+                    }
                 }
-                close()
+                emit(LlmStreamEvent.Done(finishReason))
+            } catch (cause: Throwable) {
+                // 取消正常传播；其余异常统一映射为 Error 事件（透传状态码与详情）
+                if (cause is CancellationException) throw cause
+                emit(cause.toLlmError())
             }
         }
-
-        val source = EventSources.createFactory(httpClient.sse).newEventSource(request, listener)
-        awaitClose { runCatching { source.cancel() } }
     }
 
     /**
      * 非流式补全（标题生成 / 测试连接等辅助请求）。
-     * 返回 firstChoice 文本；HTTP 错误抛出并保留状态码。
+     * 返回首个 choice 的文本；HTTP 错误抛出并保留状态码（见 [toLlmError]）。
      */
     suspend fun completeOnce(
         providerId: String,
@@ -129,41 +101,31 @@ class ChatService @Inject constructor(
         userPrompt: String,
         maxTokens: Int,
         temperature: Double,
-    ): String = withContext(Dispatchers.IO) {
-        val messages = buildList {
-            if (systemPrompt.isNotBlank()) {
-                add(
-                    ChatMessageBody(
-                        role = if (model.systemRole.equals("developer", true)) "developer" else "system",
-                        content = systemPrompt,
+    ): String {
+        val openAI = clientFactory.client(providerId, baseUrl, token)
+        val request = chatCompletionRequest {
+            this.model = ModelId(model.modelId)
+            messages = buildList {
+                if (systemPrompt.isNotBlank()) {
+                    add(
+                        if (model.systemRole.equals("developer", true)) {
+                            ChatMessage.Developer(systemPrompt)
+                        } else {
+                            ChatMessage.System(systemPrompt)
+                        }
                     )
-                )
+                }
+                add(ChatMessage.User(userPrompt))
             }
-            add(ChatMessageBody(role = "user", content = userPrompt))
-        }
-        val body = ChatCompletionBody.of(
-            model = model.modelId,
-            messages = messages,
-            temperature = if (model.supportsTemperature) temperature else null,
-            maxTokens = if (model.useMaxCompletionTokens) null else maxTokens,
-            stream = false,
-            includeUsage = false,
-            reasoningEffort = null, // 辅助请求不需要思考
-        )
-        val request = Request.Builder()
-            .url(joinUrl(baseUrl, "/chat/completions"))
-            .header("Authorization", "Bearer $token")
-            .header("Content-Type", "application/json")
-            .post(gson.toJson(body).toRequestBody(JSON_MEDIA))
-            .build()
-        httpClient.default.newCall(request).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw HttpLlmException(response.code, ErrorCodeMapper.describe(response.code, parseServerMessage(text)))
+            if (model.supportsTemperature) this.temperature = temperature
+            if (model.useMaxCompletionTokens) {
+                maxCompletionTokens = maxTokens
+            } else {
+                this.maxTokens = maxTokens
             }
-            gson.fromJson(text, ChatCompletionResponse::class.java)
-                .choices.firstOrNull()?.message?.content.orEmpty().trim()
         }
+        val completion = openAI.chatCompletion(request)
+        return completion.choices.firstOrNull()?.message?.contentText().orEmpty().trim()
     }
 
     /** 设置页“测试连接”：maxTokens=1 的非流式短请求，12 秒超时。 */
@@ -172,7 +134,7 @@ class ChatService @Inject constructor(
         baseUrl: String,
         token: String,
         model: ModelConfigEntity,
-    ): TestConnectionResult {
+    ): ChatService.TestConnectionResult {
         if (token.isBlank()) return TestConnectionResult.Failure(message = "尚未配置 API Key")
         return try {
             val start = System.currentTimeMillis()
@@ -200,59 +162,58 @@ class ChatService @Inject constructor(
 
     /**
      * 拉取供应商模型列表（GET /models）。
-     * - OpenAI 兼容端点：Authorization: Bearer，解析 data[].id；
-     * - Anthropic 端点：x-api-key + anthropic-version，解析 data[].id；
-     * 返回 (modelId, displayName) 对；失败抛 HttpLlmException / IOException。
+     * - OpenAI 兼容端点：openai-kotlin models()，Bearer 认证；
+     * - Anthropic 端点：Ktor 直连，x-api-key + anthropic-version；
+     * 返回 (modelId, displayName) 对。
      */
     suspend fun fetchModels(
         baseUrl: String,
         token: String,
         isAnthropic: Boolean = false,
     ): List<Pair<String, String>> = withContext(Dispatchers.IO) {
-        val builder = Request.Builder()
-            .url(joinUrl(baseUrl, "/models"))
-            .get()
-        if (isAnthropic) {
-            builder.header("x-api-key", token).header("anthropic-version", "2023-06-01")
-        } else {
-            builder.header("Authorization", "Bearer $token")
+        if (!isAnthropic) {
+            val openAI = clientFactory.client("fetch:$baseUrl", baseUrl, token)
+            return@withContext openAI.models().map { it.id.id to it.id.id }
         }
-        httpClient.default.newCall(builder.build()).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw HttpLlmException(response.code, ErrorCodeMapper.describe(response.code, parseServerMessage(text)))
-            }
-            val root = runCatching { gson.fromJson(text, ModelsListResponse::class.java) }.getOrNull()
-                ?: throw IOException("响应格式无法解析")
-            root.data
-                .mapNotNull { info -> info.id.takeIf { it.isNotBlank() } }
-                .map { id -> id to id } // 展示名默认同 ID，可在添加时编辑
+        // Anthropic 风格端点直连（Ktor）
+        val url = OpenAiClientFactory.normalizeBaseUrl(baseUrl) + "/models"
+        val response = auxHttp.client.get(url) {
+            header("x-api-key", token)
+            header("anthropic-version", "2023-06-01")
         }
+        if (response.status != HttpStatusCode.OK) {
+            val body = response.bodyAsText()
+            throw HttpLlmException(response.status.value, ErrorCodeMapper.describe(response.status.value, parseServerMessage(body)))
+        }
+        val root = runCatching { json.parseToJsonElement(response.bodyAsText()).jsonObject }.getOrNull()
+            ?: throw IOException("响应格式无法解析")
+        root["data"]?.jsonArray?.mapNotNull { element ->
+            runCatching { element.jsonObject["id"]?.jsonPrimitive?.content }.getOrNull()?.takeIf { it.isNotBlank() }
+        }?.map { it to it } ?: emptyList()
     }
 
     // ---------------- 内部工具 ----------------
 
-    private fun buildRequestBody(params: StreamChatParams, stream: Boolean): okhttp3.RequestBody {
+    private fun buildRequest(params: StreamChatParams, stream: Boolean): com.aallam.openai.api.chat.ChatCompletionRequest {
         val messages = buildList {
             if (params.systemPrompt.isNotBlank()) {
                 add(
-                    ChatMessageBody(
-                        role = if (params.model.systemRole.equals("developer", true)) "developer" else "system",
-                        content = params.systemPrompt,
-                    )
+                    if (params.model.systemRole.equals("developer", true)) {
+                        ChatMessage.Developer(params.systemPrompt)
+                    } else {
+                        ChatMessage.System(params.systemPrompt)
+                    }
                 )
             }
             params.messages.forEach { m ->
                 if (m.imageDataUrls.isEmpty()) {
-                    add(ChatMessageBody(role = m.role, content = m.text))
+                    add(if (m.role.equals("assistant", true)) ChatMessage.Assistant(m.text) else ChatMessage.User(m.text))
                 } else {
                     val parts = buildList {
-                        if (m.text.isNotBlank()) add(ContentPart(type = "text", text = m.text))
-                        m.imageDataUrls.forEach { url ->
-                            add(ContentPart(type = "image_url", imageUrl = ImageUrl(url = url, detail = m.imageDetail)))
-                        }
+                        if (m.text.isNotBlank()) add(TextPart(m.text))
+                        m.imageDataUrls.forEach { url -> add(ImagePart(url = url, detail = m.imageDetail)) }
                     }
-                    add(ChatMessageBody(role = m.role, content = parts))
+                    add(ChatMessage.User(parts))
                 }
             }
         }
@@ -269,12 +230,13 @@ class ChatService @Inject constructor(
         // - DeepSeek 供应商：NONE 发送 "none" 显式关闭思考；
         // - 其他供应商：NONE 不发送参数（多数端点不识别 "none"）。
         val thinkingEnabled = params.reasoningEffort != ReasoningEffortLevel.NONE
-        val effortParam: String? = if (params.model.supportsReasoning) {
+        val effortParam: Effort? = if (params.model.supportsReasoning) {
             when (params.reasoningEffort) {
-                ReasoningEffortLevel.NONE -> if (params.providerId == BalanceService.DEEPSEEK_ID) "none" else null
-                ReasoningEffortLevel.LOW -> "low"
-                ReasoningEffortLevel.HIGH -> "high"
-                ReasoningEffortLevel.MAX -> "max"
+                ReasoningEffortLevel.NONE ->
+                    if (params.providerId == BalanceService.DEEPSEEK_ID) Effort("none") else null
+                ReasoningEffortLevel.LOW -> Effort("low")
+                ReasoningEffortLevel.HIGH -> Effort("high")
+                ReasoningEffortLevel.MAX -> Effort("max")
             }
         } else {
             null
@@ -283,26 +245,38 @@ class ChatService @Inject constructor(
         // 思考开启时 temperature 不生效（DeepSeek 文档），直接不发送
         val temperature = if (params.model.supportsTemperature && !thinkingEnabled) params.temperature else null
 
-        val body = ChatCompletionBody.of(
-            model = params.model.modelId,
-            messages = messages,
-            temperature = temperature,
-            maxTokens = if (params.model.useMaxCompletionTokens) null else maxTokens,
-            stream = stream,
-            includeUsage = stream && params.model.supportsStreamUsage,
-            reasoningEffort = effortParam,
-        )
-        return gson.toJson(body).toRequestBody(JSON_MEDIA)
+        return chatCompletionRequest {
+            this.model = ModelId(params.model.modelId)
+            this.messages = messages
+            this.temperature = temperature
+            if (params.model.useMaxCompletionTokens) {
+                maxCompletionTokens = maxTokens
+            } else {
+                this.maxTokens = maxTokens
+            }
+            if (stream && params.model.supportsStreamUsage) {
+                streamOptions = StreamOptions(includeUsage = true)
+            }
+            reasoningEffort = effortParam
+        }
     }
 
-    private fun parseServerMessage(errorBody: String?): String? {
-        if (errorBody.isNullOrBlank()) return null
-        val parsed = runCatching { gson.fromJson(errorBody, ApiErrorBody::class.java) }.getOrNull()
-        return parsed?.error?.message?.takeIf { it.isNotBlank() }
+    private fun parseServerMessage(errorBody: String): String? {
+        if (errorBody.isBlank()) return null
+        return runCatching {
+            val root = json.parseToJsonElement(errorBody).jsonObject
+            root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+        }.getOrNull()
     }
 
-    private fun joinUrl(baseUrl: String, path: String): String =
-        baseUrl.trim().trimEnd('/') + path
+    /** 提取 ChatMessage.content 文本（TextContent 或部件列表）。 */
+    private fun com.aallam.openai.api.chat.ChatMessage.contentText(): String {
+        return when (val content = messageContent) {
+            is TextContent -> content.content
+            is ListContent -> content.content.filterIsInstance<TextPart>().joinToString("") { it.text }
+            else -> ""
+        }
+    }
 
     sealed interface TestConnectionResult {
         data class Success(val latencyMs: Long) : TestConnectionResult
@@ -311,22 +285,29 @@ class ChatService @Inject constructor(
 
     private companion object {
         const val TEST_TIMEOUT_MILLIS = 12_000L
-        val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 }
 
-/** 携带 HTTP 状态码的业务异常。 */
+/** 携带 HTTP 状态码的业务异常（保留给调用方兼容）。 */
 class HttpLlmException(val statusCode: Int, override val message: String) : Exception(message)
 
 /** 统一错误转译：保留 HTTP 状态码与 Provider 错误详情。 */
 fun Throwable.toLlmError(): LlmStreamEvent.Error = when (this) {
+    is OpenAIAPIException -> LlmStreamEvent.Error(
+        statusCode = statusCode,
+        message = ErrorCodeMapper.describe(statusCode, message ?: "服务端错误"),
+    )
+    is OpenAIHttpException, is OpenAIException -> LlmStreamEvent.Error(message = ErrorCodeMapper.describeNetworkError(message))
     is HttpLlmException -> LlmStreamEvent.Error(statusCode = statusCode, message = message)
     is IOException -> LlmStreamEvent.Error(message = ErrorCodeMapper.describeNetworkError(message))
     is TimeoutCancellationException -> LlmStreamEvent.Error(message = "请求超时")
+    is ConnectTimeoutException -> LlmStreamEvent.Error(message = "连接超时，请检查网络或 Base URL")
+    is SocketTimeoutException -> LlmStreamEvent.Error(message = "网络读取超时")
     else -> LlmStreamEvent.Error(message = message ?: javaClass.simpleName)
 }
 
 fun Throwable.readableMessage(): String = when (this) {
+    is OpenAIAPIException -> ErrorCodeMapper.describe(statusCode, message ?: "服务端错误")
     is HttpLlmException -> message
     is IOException -> ErrorCodeMapper.describeNetworkError(message)
     else -> message ?: javaClass.simpleName

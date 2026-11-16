@@ -1,6 +1,6 @@
 # MChat
 
-MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose + Material3 打造，基于 **OkHttp + okhttp-sse + Gson 原生实现**的流式传输（不依赖任何 OpenAI SDK），默认内置 DeepSeek，支持用户自行接入任意 OpenAI 兼容服务，本地优先、零遥测。
+MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose + Material3 打造，基于 **openai-kotlin（Ktor + OkHttp 引擎）** 实现流式传输，UI 全面对齐 [kelivo](https://github.com/Chevey339/kelivo)（设置 / 对话 / 侧边栏），液态玻璃参考 [Fluxhub](https://github.com/henryz78/Fluxhub)（[AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) backdrop 库：vibrancy + 模糊 + 折射透镜），默认内置 DeepSeek，支持用户自行接入任意 OpenAI 兼容服务，本地优先、零遥测。
 
 - **版本**：0.1.0（versionCode 1，全程锁定，CI 强制校验）
 - **包名**：`com.ming.mchat`
@@ -8,27 +8,31 @@ MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose
 
 ## 截图（占位）
 
-| 聊天页（DeepSeek 风格） | 历史抽屉 | 液态玻璃（默认关闭，可开启） |
+| 聊天页（kelivo 风格） | 侧边栏抽屉 | 液态玻璃（默认关闭，可开启） |
 | :---: | :---: | :---: |
 | ![chat](docs/placeholder-chat.png) | ![drawer](docs/placeholder-drawer.png) | ![glass](docs/placeholder-glass.png) |
 
 ## 功能列表
 
-- **DeepSeek 风格 UI**：品牌蓝 #4D6BFE 三色体系（浅 #F7F7F8 / 深 #0F1014）；助手消息扁平无气泡 + DeepSeek 鲸鱼徽标，用户消息蓝色气泡；空会话居中欢迎页（logo + 问候语）；输入区 28dp 大圆角悬浮容器，内嵌当前模型名 chip / 上下文进度环 / 深度思考四档 pill（高对比选中态，深浅色均清晰）；流式输出 90ms 节流 + 底部智能跟随（上滑阅读不打断）。
-- **流式聊天**：OkHttp SSE（EventSource 桥接 channelFlow，readTimeout=0 不掐断）逐字输出，可随时停止（awaitClose 关闭连接，不吞 CancellationException）；usage 从最后一个 chunk 捕获（stream_options.include_usage），含缓存命中 / 推理 token 明细。
-- **默认仅 DeepSeek**：内置 deepseek-flash（默认，131072 上下文，视觉 + 思考）与 deepseek-v4-pro（思考模型）；旧模型名（deepseek-4.1-* / deepseek-chat / deepseek-reasoner）自动 remap，会话无缝迁移。
-- **自定义供应商**：设置 → 添加供应商（Base URL / API Key / 展示名）；支持"从 API 拉取模型列表"（GET /models，OpenAI 兼容 Bearer / Anthropic x-api-key 双认证）；模型可添加 / 编辑 / 删除（删除后会话自动 remap 兜底）；DeepSeek 可一键恢复内置模型。
-- **思考模式（对齐官方文档）**：reasoning_effort 四档 none / low / high / max（默认 high），DeepSeek 端"关闭"档显式发送 none；思考开启时不发送 temperature（官方文档：思考模式下不生效）；思维链 reasoning_content 折叠卡片（正在思考… / 已深度思考，折叠时显示摘要，点击展开），历史消息重新打开仍可查看（落库持久化）；设置中可关闭默认折叠。
-- **长按消息菜单（DeepSeek 端交互）**：底部弹出操作单，从上到下依次：复制（整段 Markdown 原文）/ 选择文本（选择格式化后文本）/ 查看原格式（底部抽屉显示原始 Markdown 源码）/ 重新生成（最后一条助手消息）/ 删除。
-- **Token 统计双轨**：服务端 usage 优先，本地估算（JTokkit + 字符兜底）补偿；消息气泡展示 输入/输出/总数/模型/时延，流式中显示 `≈`，结束后切换真实值；按天按模型聚合，标题生成等辅助消耗单独记账。
-- **附件**：Photo Picker 多选图片（最多 9 张，不申请存储权限）、txt/md/csv/json 文本、PDF（PdfBox-Android 按页提取）；图片自动压缩（长边 1568 / JPEG 85 / 单图 4MB / 剥离 EXIF / 透明铺白底 / HEIC 兼容）；附件文本以 `<untrusted_file>` 包裹注入并附安全声明。
-- **提示词系统**：内置 4 个预设（翻译助手 / 文档总结 / 代码审查 / 写作润色）+ 自定义 CRUD + 导入导出；Mustache 子集模板引擎（`{{var}}`，未定义保留原样），内置变量 date/time/model/app_version/attachment_names/locale；注入优先级 单条 > 会话 > 全局；注入扫描只标记不删除，发送前确认。
-- **会话标题状态机**：DEFAULT → AUTO_TRUNCATE（首条用户消息兜底）→ AUTO_LLM（首轮结束异步生成）；MANUAL 之后任何自动流程不可覆盖（SQL 层守卫）；长按/重新生成，按 convId Mutex 防并发。
-- **历史抽屉（重构）**：DeepSeek logo + 当前模型卡片 + 新建对话 / 搜索 / 置顶与时间分组（当前会话品牌蓝高亮）/ 设置入口；长按菜单（置顶 / 重命名 / 删除）；右滑删除需二次确认；删除当前会话同步重置状态（修复快速发消息竞态）；聊天背景图为图片时抽屉与设置页不显示背景图。
-- **思考强度 & 输出上限**：思考四档（关闭/低/高/最高，默认高）；输出上限三模式（默认不发送 max_tokens / 手动 / 自动=上下文 50%）。
-- **上下文环 & DeepSeek 余额**：圆形进度环内嵌于输入框功能行，随上下文增加平滑填充（400ms 动画）；环身=下一轮请求上下文占用/contextWindow（<80% 品牌蓝 / 80~95% 橙 / >95% 红，服务端 usage 优先、本地估算前缀 ≈）；DeepSeek 环心显示余额（>999 缩写 1.2K），点击展开 token 拆分与余额明细；低余额提示条点击即可关闭（余额刷新后若仍低重新出现）；刷新时机=进页/回前台/对话结束/测试连接/手动，失败静默保留缓存。
-- **完整设置页**：九大分组（外观 / 模型与 Provider / 提示词 / 会话与标题 / 附件 / 用量统计 / 安全与隐私 / 数据管理 / 关于），全部 DataStore 持久化即时生效；供应商列表与余额卡展示 DeepSeek logo；API Key 状态实时校验（修复 providers 异步加载时误报“未配置”）。
-- **错误码映射**：HTTP 400/401/402/403/404/408/413/422/429/5xx → 中文可读提示（含服务端错误详情透传）；网络异常（DNS / 超时 / SSL）分类描述；finish_reason（length / content_filter / 资源不足等）语义化。
+- **kelivo 风格 UI（第 5 轮全面对齐）**：默认调色板（主色 #4D5C92 / 浅色 #F7F7F7 / 深色 #121213）+ 动态取色；SurfaceLadder 语义表面（page / card / surfaceFill / 发丝描边 hairline）；聊天气泡磨砂 / 实底两档（磨砂 = 半透明 + 0.5dp 发丝描边，半径 16）；用户消息右对齐（最大 75% 屏宽）+ 用户名 / 时间戳头部；助手消息左对齐带思考折叠卡。
+- **长按锚点菜单（自适应方向）**：消息与会话的长按菜单以长按点为水平中心展开；长按点偏上（含中间区域）向下展开、偏下向上展开，放不下自动切换方向并贴边；150ms EaseOutCubic 淡入 + 以按压侧为原点的轻微缩放；菜单容器自带 animateContentSize（子区域展开 / 收起有过渡）。
+- **动画体系（Kotlin 原生）**：MotionCurves 标准三次贝塞尔缓动（EaseOutCubic / EaseInCubic / EaseInOutCubic / EaseOutQuart / EaseOutExpo）+ 弹簧（按压 / 回弹）；五档标准时长（110/150/200/220/300ms）；iOS 式无涟漪按压（collectIsPressedAsState + 轻缩放）；全部尊重"减少动画"与系统无障碍。
+- **展开 / 收起动画（animateContentSize）**：思考过程折叠卡、快捷短语行、多选计数栏、上下文环浮层等展开收起全部使用 animateContentSize + EaseOutCubic。
+- **跟随输出滚动**：流式输出期间仅当页面停留在底部时自动跟随滚动；上滑阅读历史不打断；离开底部时浮现玻璃圆钮（回到底部 / 上一条提问，220ms 缩放 + 淡入，kelivo ScrollNavigationButtons）。
+- **流式聊天（openai-kotlin）**：`OpenAI.chatCompletions` Flow 逐事件映射（SSE 解析完全由库完成）；reasoning_content 原生字段（ChatDelta）；取消即断流（CancellationException 不吞）；usage 从末 chunk 捕获；思考模式 reasoning_effort 四档（none/low/high/max，Effort 值类直传）；思考开启时不发送 temperature。
+- **多 Provider**：内置 DeepSeek（deepseek-flash 视觉+思考 / deepseek-v4-pro 思考）+ 自定义供应商（Base URL / API Key / 从 API 拉取模型，OpenAI 兼容 Bearer 与 Anthropic x-api-key 双认证）；按 providerId 缓存 OpenAI 客户端，配置变更失效重建。
+- **侧边栏（kelivo）**：75% 屏宽抽屉；用户头像（emoji）+ 用户名；当前模型卡片（点击切换）；新建对话 / 临时对话开关；搜索过滤；置顶 + 今天/昨天/7天内/30天内/更早 分组；长按锚点菜单（多选 / 重命名 / 置顶 / 复制会话 / 删除）；多选模式（计数栏 + 全选 + 批量置顶 + 批量删除，AnimatedVisibility 淡入切换）。
+- **临时对话（kelivo temporary chat）**：消息仅存内存不落库，退出即焚并恢复之前的会话；顶栏一键开关。
+- **消息编辑后重发（kelivo / Chatbox）**：编辑用户消息 → 删除其后全部回复 → 基于新内容重新提问（二次确认对话框说明影响）。
+- **快捷短语（kelivo quick phrase）**：输入栏闪电按钮展开短语行（animateContentSize），点击填入输入框；内置 6 条 + 设置页自定义管理。
+- **用户资料（kelivo user profile）**：用户名 + emoji 头像，展示在抽屉头部 / 欢迎页 / 消息时间戳。
+- **思考折叠卡**：「正在思考… / 已深度思考」+ 折叠摘要 2 行 + 点击展开（animateContentSize）；思维链落库持久化，历史消息可回看；设置可关默认折叠。
+- **Token 统计双轨**：服务端 usage 优先，本地估算（JTokkit + 字符兜底）补偿；消息气泡展示 输入/输出/总数/模型/时延，流式中显示 `≈`。
+- **附件**：Photo Picker 多选图片（最多 9 张）、txt/md/csv/json、PDF（PdfBox-Android）；图片压缩（长边 1568 / JPEG 85 / 4MB / 剥离 EXIF）；附件文本 `<untrusted_file>` 包裹 + 安全声明。
+- **提示词系统**：内置 4 预设 + 自定义 CRUD + 导入导出；Mustache 子集模板；注入扫描只标记不删除。
+- **会话标题状态机**：DEFAULT → AUTO_TRUNCATE → AUTO_LLM；MANUAL 不可被自动覆盖。
+- **设置页（kelivo iOS 风格）**：分组卡片 + iOS 导航行（36dp 图标槽 / 15sp 标签 / chevron / 0.6dp 缩进分隔线）+ 二级页面内推（slide + fade）；分组：通用（主题与外观 / 用户资料 / 聊天显示）· 模型与聊天 · 效率（提示词 / 快捷短语）· 数据 · 关于；全部 DataStore 持久化即时生效。
+- **错误码映射**：HTTP 400~5xx → 中文可读提示（服务端详情透传，不吞 400/413）；网络异常分类。
 
 ## 技术栈
 
@@ -39,8 +43,8 @@ MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose
 | 架构 | 多模块 · MVVM · Repository |
 | 依赖注入 | Hilt 2.52（KSP） |
 | 异步 | Coroutines + Flow |
-| LLM 客户端 | **OkHttp 4.12 + okhttp-sse（原生 SSE）+ Gson 2.11**（无 OpenAI SDK 依赖） |
-| 序列化 | Kotlinx Serialization |
+| LLM 客户端 | **openai-kotlin 4.2.0（openai-client）+ Ktor 3.0.3（OkHttp 引擎）** |
+| 序列化 | Kotlinx Serialization（openai-kotlin 同栈） |
 | 本地存储 | Room 2.6.1（KSP）· DataStore Preferences |
 | 图片 | Coil |
 | PDF | PdfBox-Android |
@@ -53,10 +57,11 @@ MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose
 app              入口、导航、主题装配、DI 聚合
 core-common      工具、AppResult、设置枚举
 core-data        Room 实体/DAO/数据库、DataStore、Keystore 封装、种子数据
-core-llm         OkHttp/Gson 原生 LLM 客户端（SSE 流式、usage、错误映射、模型列表拉取）、Token 估算、DeepSeek 余额
+core-llm         openai-kotlin 客户端工厂（按 Provider 缓存）、流式映射、错误映射、模型列表拉取、Token 估算、DeepSeek 余额（Ktor 直连）
 core-prompt      提示词预设、模板引擎、注入解析、注入扫描
 core-attachment  图片压缩、文本/PDF 提取、附件仓库
-core-theme       MD3 主题、动态取色、液态玻璃视觉层、外观设置
+core-theme       kelivo 风格主题（SurfaceLadder 语义表面）、动效体系（MotionCurves）、iOS 分组组件、液态玻璃（backdrop）
+core-backdrop    AndroidLiquidGlass（Kyant0，Apache-2.0）源码内嵌，适配 Kotlin 2.0.21 / Compose 1.7.4
 feature-chat     聊天页、消息列表、输入区、附件条、上下文环
 feature-history  左侧历史抽屉、会话列表、模型选择
 feature-settings 完整设置页（九大分组）+ Provider 编辑
@@ -66,7 +71,7 @@ feature-title    会话标题生成器（状态机）
 ## 外观说明
 
 - **默认**：克制的 MD3——Material3 组件、色调表面、圆角，无多余装饰；颜色跟随系统（Android 12+ 动态取色，以下回退默认 M3）；四档主题模式：跟随系统 / 浅色 / 深色 / 动态取色（仅 12+）。
-- **液态玻璃（默认关闭）**：设置 → 外观开启后，在语义色之上为 TopAppBar、底部输入栏、抽屉、对话框、设置分组卡片叠加半透明渐变 + 边缘高光描边（`LiquidGlassSurface`）；抽屉打开时对背后内容做真实背景模糊（Android 12+ RenderEffect，低版本自动降级为半透明+渐变高光，不崩溃）；强度三档（低/中/高）；列表项与长列表滚动区域不做实时模糊；文本统一 onSurface 保证对比度；“减少动画”开关同时尊重系统“移除动画”无障碍设置。
+- **液态玻璃（默认关闭，参考 Fluxhub）**：设置 → 外观开启后，根布局经 `layerBackdrop` 录制为采样源，TopAppBar / 底部输入栏 / 设置分组卡片通过 `drawBackdrop` 采样背后内容并施加 **vibrancy（饱和度提升）+ 高斯模糊 + 折射透镜（lens）**——iOS 26 风格的真实内容穿透玻璃；Android 12 以下自动跳过 RenderEffect（仅保留表面色调 + 发丝描边，不崩溃），Android 13 以下跳过折射；强度三档（低/中/高）分别调模糊半径 / 折射高度 / 色调浓度；列表项与长列表滚动区域不做实时模糊；文本统一 onSurface 保证对比度；"减少动画"开关同时尊重系统"移除动画"无障碍设置。Popup 独立窗口中的锚点菜单使用半透明 + 描边 + 软阴影的降级玻璃。
 - 两套视觉共用同一份导航与功能，仅悬浮层绘制不同。
 
 ## Provider 配置
@@ -118,11 +123,11 @@ cd MChat
 ## 安全说明
 
 - API Key 使用 Android Keystore（AES/GCM 256）加密，Room 只存密文引用，绝不明文落盘；仓库不含任何真实密钥。
-- openai-kotlin 已移除，OkHttp 客户端不启用任何请求日志，任何构建都不输出敏感信息。
+- openai-kotlin 日志级别 LogLevel.None（不输出任何请求日志，Authorization 自动 sanitize），任何构建都不打印敏感信息。
 - 附件文本以 `<untrusted_file>` 强分隔符包裹 + 安全声明；注入扫描只标记不删除，发送前需用户确认。
 - LLM 输出永远不会直接执行系统命令；工具调用层要求白名单、参数校验、用户确认与审计日志。
 - 余额查询仅访问 `https://api.deepseek.com/user/balance`，Key 不落日志。
 
 ## License
 
-MIT License © Ming-QWQ520（详见 [LICENSE](LICENSE)）。依赖及其许可：OkHttp / okhttp-sse（Apache-2.0）、Gson（Apache-2.0）、PdfBox-Android（Apache-2.0）、JTokkit（MIT）、Coil（Apache-2.0）、Compose/Material3（Apache-2.0）。
+MIT License © Ming-QWQ520（详见 [LICENSE](LICENSE)）。依赖及其许可：openai-kotlin（MIT）、Ktor / OkHttp 引擎（Apache-2.0）、AndroidLiquidGlass backdrop（Apache-2.0，源码内嵌于 core-backdrop）、PdfBox-Android（Apache-2.0）、JTokkit（MIT）、Coil（Apache-2.0）、Compose/Material3（Apache-2.0）。UI 参考：kelivo（GPL-3.0，仅交互与视觉参考，未复制代码）与 Fluxhub（GPL-3.0，仅液态玻璃用法参考）。

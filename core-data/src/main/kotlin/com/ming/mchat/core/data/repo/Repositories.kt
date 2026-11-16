@@ -57,6 +57,49 @@ class ConversationRepository @Inject constructor(
         }
     }
 
+    /** 批量删除（多选模式）：逐个级联清理。 */
+    suspend fun deleteManyCascade(ids: List<Long>) = withContext(Dispatchers.IO) {
+        ids.forEach { id -> deleteCascade(id) }
+    }
+
+    /** 复制会话（kelivo 复制）：标题加“（副本）”后缀，消息与附件一并复制（附件文件复制为新文件）。 */
+    suspend fun duplicate(conversationId: Long): Long? = withContext(Dispatchers.IO) {
+        val source = conversationDao.getById(conversationId) ?: return@withContext null
+        val now = System.currentTimeMillis()
+        val newConvId = conversationDao.insert(
+            source.copy(
+                id = 0,
+                title = source.title.removeSuffix("（副本）") + "（副本）",
+                titleSource = TitleSource.MANUAL,
+                isPinned = false,
+                createdAt = now,
+                updatedAt = now,
+            )
+        )
+        val messages = messageDao.listForCopy(conversationId)
+        messages.forEach { message ->
+            val newMessageId = messageDao.insert(message.copy(id = 0, conversationId = newConvId))
+            attachmentDao.getByMessage(message.id).forEach { attachment ->
+                val copiedFile = runCatching {
+                    val src = File(attachment.localPath)
+                    if (src.exists()) {
+                        val dst = File(src.parentFile, "copy_${now}_${src.name}")
+                        src.copyTo(dst, overwrite = true)
+                        dst.absolutePath
+                    } else {
+                        attachment.localPath
+                    }
+                }.getOrDefault(attachment.localPath)
+                attachmentDao.insert(attachment.copy(id = 0, messageId = newMessageId, localPath = copiedFile, createdAt = now))
+            }
+        }
+        newConvId
+    }
+
+    /** 批量置顶/取消置顶。 */
+    suspend fun setPinnedMany(ids: List<Long>, pinned: Boolean) =
+        conversationDao.setPinnedMany(ids, pinned)
+
     suspend fun rename(conversationId: Long, title: String) =
         conversationDao.rename(conversationId, title.trim(), System.currentTimeMillis())
 
@@ -84,6 +127,7 @@ class ConversationRepository @Inject constructor(
 class MessageRepository @Inject constructor(
     private val messageDao: MessageDao,
     private val conversationDao: com.ming.mchat.core.data.dao.ConversationDao,
+    private val attachmentDao: AttachmentDao,
 ) {
     fun observeByConversation(conversationId: Long): Flow<List<MessageEntity>> =
         messageDao.observeByConversation(conversationId)
@@ -98,6 +142,19 @@ class MessageRepository @Inject constructor(
         messageDao.getByConversation(conversationId)
 
     suspend fun delete(messageId: Long) = messageDao.delete(messageId)
+
+    /** 编辑重发：更新消息内容并删除其后全部消息（含附件文件）。 */
+    suspend fun editAndTruncateAfter(conversationId: Long, messageId: Long, newContent: String) =
+        withContext(Dispatchers.IO) {
+            val later = messageDao.listForCopy(conversationId).filter { it.id > messageId }
+            messageDao.deleteAfter(conversationId, messageId)
+            later.forEach { message ->
+                attachmentDao.getByMessage(message.id).forEach { attachment ->
+                    runCatching { File(attachment.localPath).takeIf { it.exists() }?.delete() }
+                }
+            }
+            messageDao.updateContent(messageId, newContent)
+        }
 
     suspend fun countByRole(conversationId: Long, role: Role): Int =
         messageDao.countByRole(conversationId, role.name)

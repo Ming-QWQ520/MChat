@@ -25,6 +25,7 @@ android {
 
 dependencies {
     api(project(":core-common"))
+    api(project(":core-backdrop"))
 
     api(platform(libs.compose.bom))
     api(libs.compose.ui)

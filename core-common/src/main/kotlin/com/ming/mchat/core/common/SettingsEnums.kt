@@ -14,3 +14,15 @@ enum class ReasoningEffortLevel { NONE, LOW, HIGH, MAX }
 enum class OutputTokenMode { DEFAULT, MANUAL, AUTO }
 enum class ChatBackground { SOLID, GRADIENT, IMAGE }
 enum class TitleLanguage { AUTO, CHINESE, ENGLISH }
+
+/** 内置快捷短语（kelivo quick phrase；feature-chat 与 feature-settings 共享）。 */
+object BuiltinQuickPhrases {
+    val ALL: List<String> = listOf(
+        "继续",
+        "展开讲讲",
+        "换个角度回答",
+        "给我一个例子",
+        "总结成要点",
+        "翻译成英文",
+    )
+}

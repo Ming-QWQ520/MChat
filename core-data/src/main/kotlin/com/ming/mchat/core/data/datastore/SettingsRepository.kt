@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.ming.mchat.core.common.ChatBackground
 import com.ming.mchat.core.common.GlassIntensity
@@ -81,6 +82,22 @@ data class AttachmentSettings(
     val stripExif: Boolean = true,
 )
 
+/** 用户资料（kelivo：抽屉头部展示）。 */
+data class UserProfileSettings(
+    val userName: String = "",
+    val avatarEmoji: String = "🦉",
+)
+
+/** 聊天气泡风格（kelivo：磨砂 / 实底）。 */
+enum class BubbleStyle { FROSTED, SOLID }
+
+/** 聊天展示设置。 */
+data class ChatDisplaySettings(
+    val bubbleStyle: BubbleStyle = BubbleStyle.FROSTED,
+    val showTimestamp: Boolean = true,
+    val showMessageNavButtons: Boolean = true,
+)
+
 /**
  * 统一 DataStore 偏好设置仓库：分组 Flow + 整组写入，即时生效。
  */
@@ -143,6 +160,30 @@ class SettingsRepository @Inject constructor(
         )
     }
 
+    val userProfile: Flow<UserProfileSettings> = dataStore.data.map { p ->
+        UserProfileSettings(
+            userName = p[Keys.userName] ?: "",
+            avatarEmoji = p[Keys.avatarEmoji] ?: "🦉",
+        )
+    }
+
+    val chatDisplay: Flow<ChatDisplaySettings> = dataStore.data.map { p ->
+        ChatDisplaySettings(
+            bubbleStyle = enumOf(p[Keys.bubbleStyle], BubbleStyle.FROSTED),
+            showTimestamp = p[Keys.showTimestamp] ?: true,
+            showMessageNavButtons = p[Keys.showMessageNavButtons] ?: true,
+        )
+    }
+
+    /** 快捷短语（自定义部分；内置短语另行提供）。 */
+    val quickPhrases: Flow<List<String>> = dataStore.data.map { p ->
+        p[Keys.quickPhrases]?.toList() ?: emptyList()
+    }
+
+    suspend fun setQuickPhrases(value: List<String>) {
+        dataStore.edit { it[Keys.quickPhrases] = value.distinct().toSet() }
+    }
+
     suspend fun setAppearance(value: AppearanceSettings) {
         dataStore.edit { p ->
             p[Keys.themeMode] = value.themeMode.name
@@ -197,6 +238,21 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    suspend fun setUserProfile(value: UserProfileSettings) {
+        dataStore.edit { p ->
+            p[Keys.userName] = value.userName.take(24)
+            p[Keys.avatarEmoji] = value.avatarEmoji.take(4)
+        }
+    }
+
+    suspend fun setChatDisplay(value: ChatDisplaySettings) {
+        dataStore.edit { p ->
+            p[Keys.bubbleStyle] = value.bubbleStyle.name
+            p[Keys.showTimestamp] = value.showTimestamp
+            p[Keys.showMessageNavButtons] = value.showMessageNavButtons
+        }
+    }
+
     private object Keys {
         val themeMode = stringPreferencesKey("themeMode")
         val liquidGlassEnabled = booleanPreferencesKey("liquidGlassEnabled")
@@ -231,5 +287,12 @@ class SettingsRepository @Inject constructor(
         val imageMaxBytes = longPreferencesKey("imageMaxBytes")
         val pdfMaxChars = intPreferencesKey("pdfMaxChars")
         val stripExif = booleanPreferencesKey("stripExif")
+
+        val userName = stringPreferencesKey("userName")
+        val avatarEmoji = stringPreferencesKey("avatarEmoji")
+        val bubbleStyle = stringPreferencesKey("bubbleStyle")
+        val showTimestamp = booleanPreferencesKey("showTimestamp")
+        val showMessageNavButtons = booleanPreferencesKey("showMessageNavButtons")
+        val quickPhrases = stringSetPreferencesKey("quickPhrases")
     }
 }

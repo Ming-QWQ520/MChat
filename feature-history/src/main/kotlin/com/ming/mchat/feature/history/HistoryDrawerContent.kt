@@ -1,6 +1,9 @@
 package com.ming.mchat.feature.history
 
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,44 +20,51 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ming.mchat.core.common.TimeUtils
+import com.ming.mchat.core.theme.AnchoredContextMenu
+import com.ming.mchat.core.theme.AnchoredMenuItem
+import com.ming.mchat.core.theme.MotionCurves
+import com.ming.mchat.core.theme.MotionDurations
+import com.ming.mchat.core.theme.appSurfaces
+import com.ming.mchat.core.theme.longPressAnchor
 
 /** 抽屉会话条目。 */
 data class DrawerConversationItem(
@@ -69,11 +79,12 @@ data class DrawerConversationItem(
 private const val PINNED_BUCKET = -1
 
 /**
- * 历史抽屉（DeepSeek 手机端风格重构）：
- * - 顶部：DeepSeek logo + 当前模型卡片 + 新建对话；
- * - 中部：搜索框 + 置顶/时间分组历史会话（当前会话品牌蓝高亮）；
- * - 右滑删除需二次确认（弹窗）；
- * - 整体不透明背景，聊天背景图不会透入。
+ * 历史抽屉（kelivo 风格）：
+ * - 顶部：用户头像 + 用户名 / 当前模型卡片（点击切换）/ 新建对话 / 临时对话开关；
+ * - 中部：搜索框 + 置顶/时间分组历史会话（当前会话高亮）；
+ * - 长按会话：以长按点为中心的锚点菜单（多选 / 重命名 / 置顶 / 复制 / 删除）；
+ * - 多选模式：计数栏 + 全选 + 批量置顶 / 批量删除（animateContentSize 切换）；
+ * - 底部：设置入口。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -83,193 +94,346 @@ fun HistoryDrawerContent(
     currentProviderName: String,
     currentModelName: String,
     conversations: List<DrawerConversationItem>,
+    userName: String,
+    userAvatarEmoji: String,
+    isTemporary: Boolean,
     onNewChat: () -> Unit,
     onSelectConversation: (Long) -> Unit,
     onRenameConversation: (Long, String) -> Unit,
     onDeleteConversation: (Long) -> Unit,
-    onPinConversation: (Long, Boolean) -> Unit = { _, _ -> },
+    onDuplicateConversation: (Long) -> Unit,
+    onBatchDelete: (Set<Long>) -> Unit,
+    onBatchPin: (Set<Long>, Boolean) -> Unit,
+    onPinConversation: (Long, Boolean) -> Unit,
+    onToggleTemporary: () -> Unit,
     onOpenModelPicker: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    var renameTarget by remember { mutableStateOf<DrawerConversationItem?>(null) }
-    var deleteTarget by remember { mutableStateOf<DrawerConversationItem?>(null) }
-    var searchQuery by remember { mutableStateOf("") }
-    val isDeepSeek = currentProviderId == "deepseek"
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var renameTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    var deleteTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    // 长按锚点菜单
+    var menuTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    var menuPressOffset by remember { mutableStateOf(Offset.Zero) }
+    // 多选模式
+    var selectionMode by rememberSaveable { mutableStateOf(false) }
+    var selectedIds by rememberSaveable { mutableStateOf(setOf<Long>()) }
+    var confirmBatchDelete by rememberSaveable { mutableStateOf(false) }
 
-    Column(modifier = modifier) {
-        // ---- 顶部：DeepSeek logo + 当前模型 + 新建对话 ----
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp, 16.dp, 16.dp, 8.dp),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.foundation.Image(
-                        painter = androidx.compose.ui.res.painterResource(
-                            com.ming.mchat.core.theme.R.drawable.deepseek_logo,
-                        ),
-                        contentDescription = "DeepSeek",
-                        modifier = Modifier.size(26.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (isDeepSeek) "DeepSeek" else currentProviderName,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    IconButton(onClick = onOpenModelPicker) {
-                        Icon(Icons.Filled.SwapHoriz, contentDescription = "切换模型")
+    val filtered = remember(conversations, searchQuery) {
+        if (searchQuery.isBlank()) conversations
+        else conversations.filter { it.title.contains(searchQuery, ignoreCase = true) }
+    }
+    // 分组：置顶 + 今天/昨天/7天内/30天内/更早
+    val grouped = remember(filtered) { groupConversations(filtered) }
+    val allSelectableIds = remember(filtered) { filtered.map { it.id }.toSet() }
+
+    val menuConversation = conversations.firstOrNull { it.id == menuTarget }
+    val renameConversation = conversations.firstOrNull { it.id == renameTarget }
+    val deleteConversation = conversations.firstOrNull { it.id == deleteTarget }
+
+    Column(
+        modifier
+            .fillMaxHeight()
+            .background(MaterialTheme.colorScheme.surface),
+    ) {
+        // ---- 顶部：用户信息 + 模型卡片 + 新建/临时 ----
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 用户头像（emoji 圆底，kelivo avatarWidget）
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            userAvatarEmoji,
+                            fontSize = androidx.compose.ui.unit.TextUnit(20f, androidx.compose.ui.unit.TextUnitType.Sp),
+                        )
                     }
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.width(10.dp))
                 Text(
-                    currentModelName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    userName,
+                    style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.height(10.dp))
-                Surface(
-                    onClick = onNewChat,
-                    shape = MaterialTheme.shapes.large,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.fillMaxWidth(),
+            }
+            Spacer(Modifier.height(12.dp))
+            // 当前模型卡片：点击切换模型
+            Surface(
+                onClick = onOpenModelPicker,
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.appSurfaces.surfaceFill,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 ) {
-                    Row(
-                        Modifier.padding(vertical = 10.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("新建对话", style = MaterialTheme.typography.titleSmall)
+                    Icon(
+                        Icons.Filled.SwapHoriz,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            currentModelName,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            currentProviderName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 新建对话
+                Surface(
+                    onClick = onNewChat,
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(vertical = 10.dp),
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("新建对话", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+                // 临时对话（kelivo temporary chat）
+                Surface(
+                    onClick = onToggleTemporary,
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isTemporary) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.appSurfaces.surfaceFill,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(vertical = 10.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.FlashOn,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = if (isTemporary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (isTemporary) "退出临时" else "临时对话",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (isTemporary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
         }
 
-        // ---- 会话搜索过滤 ----
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            placeholder = { Text("搜索会话", style = MaterialTheme.typography.bodyMedium) },
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, Modifier.size(18.dp)) },
-            textStyle = MaterialTheme.typography.bodyMedium,
-        )
-
-        // ---- 中部：置顶分组 + 时间分组的历史会话列表 ----
-        val query = searchQuery.trim()
-        val filtered = remember(conversations, query) {
-            if (query.isEmpty()) conversations
-            else conversations.filter { it.title.contains(query, ignoreCase = true) }
-        }
-        val grouped = remember(filtered) {
-            val pinned = filtered.filter { it.isPinned }
-            val byTime = filtered.filterNot { it.isPinned }
-                .groupBy { TimeUtils.bucketOf(it.updatedAt) }
-                .toSortedMap()
-            buildList {
-                if (pinned.isNotEmpty()) add(PINNED_BUCKET to pinned)
-                byTime.forEach { (bucket, items) -> add(bucket to items) }
+        // ---- 搜索 / 多选计数栏（AnimatedVisibility + fade 切换）----
+        Box(Modifier.padding(horizontal = 16.dp)) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !selectionMode,
+                enter = fadeIn(tween(MotionDurations.SWITCHER, easing = MotionCurves.EaseOutCubic)),
+                exit = fadeOut(tween(MotionDurations.SWITCHER, easing = MotionCurves.EaseInCubic)),
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("搜索对话") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.appSurfaces.hairlineStrong,
+                        unfocusedBorderColor = MaterialTheme.appSurfaces.hairline,
+                        focusedContainerColor = MaterialTheme.appSurfaces.surfaceFill,
+                        unfocusedContainerColor = MaterialTheme.appSurfaces.surfaceFill,
+                    ),
+                )
+            }
+            androidx.compose.animation.AnimatedVisibility(
+                visible = selectionMode,
+                enter = fadeIn(tween(MotionDurations.SWITCHER, easing = MotionCurves.EaseOutCubic)),
+                exit = fadeOut(tween(MotionDurations.SWITCHER, easing = MotionCurves.EaseInCubic)),
+            ) {
+                SelectionCountBar(
+                    selectedCount = selectedIds.size,
+                    allSelected = allSelectableIds.isNotEmpty() && selectedIds.containsAll(allSelectableIds),
+                    onCancel = {
+                        selectionMode = false
+                        selectedIds = emptySet()
+                    },
+                    onToggleSelectAll = {
+                        selectedIds = if (selectedIds.containsAll(allSelectableIds)) emptySet() else allSelectableIds
+                    },
+                    onBatchPin = {
+                        if (selectedIds.isNotEmpty()) onBatchPin(selectedIds, true)
+                    },
+                    onBatchUnpin = {
+                        if (selectedIds.isNotEmpty()) onBatchPin(selectedIds, false)
+                    },
+                    onBatchDelete = {
+                        if (selectedIds.isNotEmpty()) confirmBatchDelete = true
+                    },
+                )
             }
         }
+        Spacer(Modifier.height(8.dp))
+
+        // ---- 会话列表 ----
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp),
+                .fillMaxWidth(),
         ) {
             grouped.forEach { (bucket, items) ->
-                stickyHeader(key = "header_$bucket") {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 4.dp),
-                        ) {
-                            if (bucket == PINNED_BUCKET) {
-                                Icon(
-                                    Icons.Filled.PushPin,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                                Spacer(Modifier.width(4.dp))
-                            }
-                            Text(
-                                if (bucket == PINNED_BUCKET) "置顶" else TimeUtils.bucketLabel(bucket),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
+                item(key = "header_$bucket") {
+                    Text(
+                        when (bucket) {
+                            PINNED_BUCKET -> "置顶"
+                            0 -> "今天"
+                            1 -> "昨天"
+                            2 -> "7 天内"
+                            3 -> "30 天内"
+                            else -> "更早"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                    )
                 }
-                items(items = items, key = { it.id }) { item ->
+                items(items.size, key = { items[it].id }) { index ->
+                    val item = items[index]
                     ConversationRow(
                         item = item,
-                        onClick = { onSelectConversation(item.id) },
-                        onRename = { renameTarget = item },
-                        onDelete = { deleteTarget = item }, // 二次确认后再真正删除
-                        onPin = { onPinConversation(item.id, !item.isPinned) },
+                        selectionMode = selectionMode,
+                        selected = selectedIds.contains(item.id),
+                        onClick = {
+                            if (selectionMode) {
+                                selectedIds = if (selectedIds.contains(item.id)) selectedIds - item.id else selectedIds + item.id
+                            } else {
+                                onSelectConversation(item.id)
+                            }
+                        },
+                        onLongPress = { offset ->
+                            if (!selectionMode) {
+                                menuTarget = item.id
+                                menuPressOffset = offset
+                            }
+                        },
                     )
                 }
             }
-            item {
-                if (filtered.isEmpty()) {
+            if (filtered.isEmpty()) {
+                item(key = "empty") {
                     Text(
-                        if (query.isEmpty()) "暂无历史会话\n点击“新建对话”开始" else "没有匹配“$query”的会话",
+                        if (searchQuery.isBlank()) "暂无历史对话" else "没有匹配的对话",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
                     )
                 }
             }
         }
 
-        HorizontalDivider()
         // ---- 底部：设置入口 ----
-        ListItem(
-            headlineContent = { Text("设置") },
-            leadingContent = { Icon(Icons.Filled.Settings, contentDescription = null) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenSettings),
-        )
+        Surface(
+            onClick = onOpenSettings,
+            color = Color24.transparent,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Settings,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(12.dp))
+                Text("设置", style = MaterialTheme.typography.bodyLarge)
+            }
+        }
     }
 
-    renameTarget?.let { target ->
+    // 长按锚点菜单（kelivo：多选 / 重命名 / 置顶 / 复制 / 删除）
+    menuConversation?.let { item ->
+        AnchoredContextMenu(
+            pressRootOffset = menuPressOffset,
+            onDismiss = { menuTarget = null },
+        ) {
+            AnchoredMenuItem(Icons.Filled.Checklist, "多选") {
+                menuTarget = null
+                selectionMode = true
+                selectedIds = setOf(item.id)
+            }
+            AnchoredMenuItem(Icons.Filled.Edit, "重命名") {
+                menuTarget = null
+                renameTarget = item.id
+            }
+            AnchoredMenuItem(
+                Icons.Filled.PushPin,
+                if (item.isPinned) "取消置顶" else "置顶",
+            ) {
+                menuTarget = null
+                onPinConversation(item.id, !item.isPinned)
+            }
+            AnchoredMenuItem(Icons.Filled.ContentCopy, "复制会话") {
+                menuTarget = null
+                onDuplicateConversation(item.id)
+            }
+            AnchoredMenuItem(Icons.Filled.Delete, "删除", danger = true) {
+                menuTarget = null
+                deleteTarget = item.id
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+
+    // 重命名对话框
+    renameConversation?.let { item ->
         RenameConversationDialog(
-            initial = target.title,
+            initial = item.title,
             onDismiss = { renameTarget = null },
             onConfirm = { title ->
-                onRenameConversation(target.id, title)
+                onRenameConversation(item.id, title)
                 renameTarget = null
             },
         )
     }
 
-    // 右滑删除 / 菜单删除的二次确认
-    deleteTarget?.let { target ->
+    // 删除二次确认
+    deleteConversation?.let { item ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("删除会话？") },
-            text = { Text("将删除「${target.title}」及其全部消息与附件，且无法恢复。") },
+            title = { Text("删除对话") },
+            text = { Text("「${item.title}」将被删除，且无法恢复。") },
             confirmButton = {
                 TextButton(onClick = {
-                    onDeleteConversation(target.id)
+                    onDeleteConversation(item.id)
                     deleteTarget = null
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
@@ -278,172 +442,183 @@ fun HistoryDrawerContent(
             },
         )
     }
+
+    // 批量删除二次确认
+    if (confirmBatchDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmBatchDelete = false },
+            title = { Text("删除 ${selectedIds.size} 个对话") },
+            text = { Text("所选对话及其消息将被删除，且无法恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onBatchDelete(selectedIds)
+                    confirmBatchDelete = false
+                    selectionMode = false
+                    selectedIds = emptySet()
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmBatchDelete = false }) { Text("取消") }
+            },
+        )
+    }
+
+    // 选中项被删除后同步清理
+    LaunchedEffect(conversations) {
+        val liveIds = conversations.map { it.id }.toSet()
+        if (selectedIds.any { it !in liveIds }) {
+            selectedIds = selectedIds.intersect(liveIds)
+            if (selectedIds.isEmpty()) selectionMode = false
+        }
+    }
 }
 
-/**
- * 会话行：右滑删除（二次确认）、长按菜单（置顶/重命名/删除）。
- * 当前会话使用品牌蓝高亮。
- */
-@OptIn(ExperimentalFoundationApi::class)
+/** 会话行：选中态复选框 / 当前会话高亮；长按呼出锚点菜单。 */
 @Composable
 private fun ConversationRow(
     item: DrawerConversationItem,
+    selectionMode: Boolean,
+    selected: Boolean,
     onClick: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    onPin: () -> Unit,
+    onLongPress: (Offset) -> Unit,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) {
-                onDelete() // 弹出二次确认，未确认前不真正删除
-                true
-            } else {
-                false
-            }
-        }
-    )
-    SwipeToDismissBox(
-        state = dismissState,
-        enableDismissFromStartToEnd = false,
-        backgroundContent = {
-            val offsetFraction = when (dismissState.dismissDirection) {
-                SwipeToDismissBoxValue.EndToStart -> 1f
-                else -> 0f
-            }
-            val horizontal by animateDpAsState(
-                targetValue = (16 * (1 - offsetFraction)).dp,
-                label = "deleteBgPadding",
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                else if (item.isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                else androidx.compose.ui.graphics.Color.Transparent,
             )
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.errorContainer),
-                contentAlignment = Alignment.CenterEnd,
-            ) {
-                Row(
-                    Modifier.padding(end = horizontal),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = "删除会话",
-                        tint = MaterialTheme.colorScheme.onErrorContainer,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "删除",
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                }
-            }
-        },
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .longPressAnchor(onLongPress),
     ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = if (item.isCurrent) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surface
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-                .combinedClickable(onClick = onClick, onLongClick = { menuExpanded = true }),
+        if (selectionMode) {
+            Icon(
+                if (selected) Icons.Filled.Check else Icons.Filled.Check,
+                contentDescription = if (selected) "已选中" else "未选中",
+                modifier = Modifier.size(18.dp),
+                tint = if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+            )
+            Spacer(Modifier.width(10.dp))
+        }
+        Column(Modifier.weight(1f).padding(vertical = 9.dp)) {
+            Text(
+                item.title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (item.isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                TimeUtils.formatMessageTime(item.updatedAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (item.isPinned) {
+            Icon(
+                Icons.Filled.PushPin,
+                contentDescription = "已置顶",
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** 多选计数栏：计数 + 全选 + 批量置顶/取消 + 批量删除 + 取消。 */
+@Composable
+private fun SelectionCountBar(
+    selectedCount: Int,
+    allSelected: Boolean,
+    onCancel: () -> Unit,
+    onToggleSelectAll: () -> Unit,
+    onBatchPin: () -> Unit,
+    onBatchUnpin: () -> Unit,
+    onBatchDelete: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.appSurfaces.surfaceFill,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
         ) {
-            Box {
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            item.title,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (item.isCurrent) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
-                    },
-                    supportingContent = {
-                        Text(
-                            TimeUtils.formatDateTime(item.updatedAt),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    },
-                    leadingContent = {
-                        Icon(
-                            Icons.AutoMirrored.Outlined.Chat,
-                            contentDescription = null,
-                            tint = if (item.isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    },
-                    trailingContent = {
-                        if (item.isPinned) {
-                            Icon(
-                                Icons.Filled.PushPin,
-                                contentDescription = "已置顶",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    },
+            IconButton(onClick = onCancel) {
+                Icon(Icons.Filled.Close, contentDescription = "退出多选")
+            }
+            Text(
+                "已选 $selectedCount 项",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onToggleSelectAll) {
+                Icon(
+                    Icons.Filled.Checklist,
+                    contentDescription = if (allSelected) "取消全选" else "全选",
+                    tint = if (allSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 )
-                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                    DropdownMenuItem(
-                        text = { Text(if (item.isPinned) "取消置顶" else "置顶") },
-                        leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
-                        onClick = { menuExpanded = false; onPin() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("重命名") },
-                        leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                        onClick = { menuExpanded = false; onRename() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("删除", color = MaterialTheme.colorScheme.error) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Filled.Delete,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                            )
-                        },
-                        onClick = { menuExpanded = false; onDelete() },
-                    )
-                }
+            }
+            IconButton(onClick = onBatchPin) {
+                Icon(Icons.Filled.PushPin, contentDescription = "批量置顶")
+            }
+            IconButton(onClick = onBatchDelete) {
+                Icon(Icons.Filled.Delete, contentDescription = "批量删除", tint = MaterialTheme.colorScheme.error)
             }
         }
     }
 }
 
+/** 会话分组：置顶优先，其余按 今天/昨天/7天内/30天内/更前 分桶。 */
+private fun groupConversations(items: List<DrawerConversationItem>): List<Pair<Int, List<DrawerConversationItem>>> {
+    val pinned = items.filter { it.isPinned }
+    val others = items.filterNot { it.isPinned }
+    val buckets = others.groupBy { TimeUtils.bucketOf(it.updatedAt) }
+    val ordered = listOf(0, 1, 2, 3, 4).filter { buckets.containsKey(it) }
+    return buildList {
+        if (pinned.isNotEmpty()) add(PINNED_BUCKET to pinned)
+        ordered.forEach { bucket -> add(bucket to buckets.getValue(bucket)) }
+    }
+}
+
+/** 透明色别名（避免魔法值散落）。 */
+private object Color24 {
+    val transparent = androidx.compose.ui.graphics.Color.Transparent
+}
+
+
+/** 重命名会话对话框。 */
 @Composable
 fun RenameConversationDialog(
     initial: String,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var text by remember { mutableStateOf(initial) }
+    var text by rememberSaveable { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("重命名会话") },
+        title = { Text("重命名对话") },
         text = {
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
-                label = { Text("标题") },
+                modifier = Modifier.fillMaxWidth(),
             )
         },
         confirmButton = {
-            TextButton(onClick = { if (text.isNotBlank()) onConfirm(text.trim()) }) { Text("确定") }
+            TextButton(onClick = { if (text.isNotBlank()) onConfirm(text.trim()) }, enabled = text.isNotBlank()) {
+                Text("保存")
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
     )
 }

@@ -1,5 +1,8 @@
 package com.ming.mchat.feature.chat.components
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +25,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
@@ -55,12 +59,16 @@ import coil.compose.AsyncImage
 import com.ming.mchat.core.attachment.PendingAttachment
 import com.ming.mchat.core.common.ReasoningEffortLevel
 import com.ming.mchat.core.data.entity.AttachmentKind
+import com.ming.mchat.core.theme.MotionCurves
+import com.ming.mchat.core.theme.MotionDurations
+import com.ming.mchat.core.theme.appSurfaces
 import com.ming.mchat.feature.chat.ChatUiState
 import java.io.File
 
 /**
- * 底部输入区（DeepSeek 手机端风格）：
- * 悬浮圆角输入容器（28dp 大圆角 + 屏幕边距），内含——
+ * 底部输入区（kelivo 风格）：
+ * 悬浮胶囊输入容器（28dp 圆角 + 屏幕边距 + 发丝描边），内含——
+ * - 快捷短语行（闪电按钮展开，animateContentSize）；
  * - 文本输入行：[+] 附件 / 多行输入框 / 发送或停止按钮；
  * - 功能行：当前模型名称 chip（点击切换模型）、上下文环、深度思考强度 pill；
  * - 附件缩略图条与低余额提示也收纳在容器内。
@@ -79,10 +87,12 @@ fun ChatBottomArea(
     onModelChipClick: () -> Unit,
     onReasoningEffortChange: (ReasoningEffortLevel) -> Unit,
     onDismissLowBalance: () -> Unit,
+    onQuickPhrase: (String) -> Unit,
     glassEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val containerShape = RoundedCornerShape(28.dp)
+    var showQuickPhrases by remember { mutableStateOf(false) }
     val containerModifier = Modifier
         .fillMaxWidth()
         .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -91,6 +101,9 @@ fun ChatBottomArea(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 10.dp)
+                .animateContentSize(
+                    animationSpec = tween(MotionDurations.CONTENT, easing = MotionCurves.EaseOutCubic),
+                )
         ) {
             if (state.showLowBalanceNotice) {
                 // 低余额提示：点击即可关闭（余额刷新后若仍低会重新出现）
@@ -126,11 +139,40 @@ fun ChatBottomArea(
                     onRemove = onRemoveAttachment,
                 )
             }
+            // 快捷短语行（kelivo quick phrase）：闪电开关，点击填入输入框
+            if (showQuickPhrases && state.quickPhrases.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                ) {
+                    items(state.quickPhrases) { phrase ->
+                        Surface(
+                            onClick = { onQuickPhrase(phrase) },
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        ) {
+                            Text(
+                                phrase,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
+                }
+            }
             // 文本输入行：[+] / 输入框 / 发送或停止
             Row(verticalAlignment = Alignment.Bottom) {
                 AttachButton(
                     onPickImages = onPickImages,
                     onPickDocuments = onPickDocuments,
+                )
+                QuickPhraseToggle(
+                    expanded = showQuickPhrases,
+                    enabled = state.quickPhrases.isNotEmpty(),
+                    onToggle = { showQuickPhrases = !showQuickPhrases },
                 )
                 OutlinedTextField(
                     value = state.input,
@@ -239,11 +281,27 @@ fun ChatBottomArea(
             Surface(
                 modifier = containerModifier,
                 shape = containerShape,
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                tonalElevation = 2.dp,
+                color = MaterialTheme.appSurfaces.card,
+                border = BorderStroke(0.5.dp, MaterialTheme.appSurfaces.hairline),
                 content = content,
             )
         }
+    }
+}
+
+/** 快捷短语开关（闪电图标）。 */
+@Composable
+private fun QuickPhraseToggle(
+    expanded: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    IconButton(onClick = onToggle, enabled = enabled) {
+        Icon(
+            Icons.Filled.Bolt,
+            contentDescription = "快捷短语",
+            tint = if (expanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

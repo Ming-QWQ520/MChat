@@ -35,6 +35,14 @@ interface ConversationDao {
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun delete(id: Long)
 
+    /** 批量删除（多选模式）。 */
+    @Query("DELETE FROM conversations WHERE id IN (:ids)")
+    suspend fun deleteMany(ids: List<Long>)
+
+    /** 取消置顶全部（多选批量取消置顶用）。 */
+    @Query("UPDATE conversations SET isPinned = :pinned WHERE id IN (:ids)")
+    suspend fun setPinnedMany(ids: List<Long>, pinned: Boolean)
+
     @Query("UPDATE conversations SET isPinned = :pinned WHERE id = :id")
     suspend fun setPinned(id: Long, pinned: Boolean)
 
@@ -112,6 +120,18 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteByConversation(conversationId: Long)
+
+    /** 编辑重发：删除某条消息之后（不含自身）的全部消息。 */
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND id > :messageId")
+    suspend fun deleteAfter(conversationId: Long, messageId: Long)
+
+    /** 编辑消息内容（仅用户消息文本）。 */
+    @Query("UPDATE messages SET content = :content WHERE id = :id")
+    suspend fun updateContent(id: Long, content: String)
+
+    /** 会话内全部消息（含附件行）供复制会话使用。 */
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
+    suspend fun listForCopy(conversationId: Long): List<MessageEntity>
 }
 
 @Dao

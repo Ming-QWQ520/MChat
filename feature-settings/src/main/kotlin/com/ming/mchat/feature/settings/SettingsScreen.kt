@@ -1,6 +1,9 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.ming.mchat.feature.settings
 
 import android.content.Intent
+import androidx.compose.animation.togetherWith
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -18,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,6 +33,8 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -90,14 +96,18 @@ import com.ming.mchat.core.data.entity.PromptPresetEntity
 import com.ming.mchat.core.llm.BalanceService
 import com.ming.mchat.core.prompt.TemplateEngine
 import com.ming.mchat.core.prompt.VariableDef
-import com.ming.mchat.core.theme.LocalLiquidGlass
-import com.ming.mchat.core.theme.LiquidGlassSurface
+import com.ming.mchat.core.theme.IosDivider
+import com.ming.mchat.core.theme.IosNavRow
+import com.ming.mchat.core.theme.SectionCard
+import com.ming.mchat.core.theme.SectionHeader
+import com.ming.mchat.core.theme.appSurfaces
 import java.io.File
 
 /**
- * 完整设置页（重构版）：现代分组卡片 + 图标标题 + SegmentedButton 选择器。
- * 分组：外观 / 模型与 Provider / 提示词 / 会话与标题 / 附件 / 用量统计 / 安全与隐私 / 数据管理 / 关于。
- * 液态玻璃开启时分组卡片使用 LiquidGlassSurface。
+ * 设置主页（kelivo iOS 风格）：
+ * - 分组卡片 + iOS 导航行（36dp 图标槽 / 15sp 标签 / chevron）；
+ * - 二级页面内推（slide + fade，AnimatedContent），全部设置项分拆到子页；
+ * - 液态玻璃开启时分组卡片使用 LiquidGlassSurface。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,49 +116,86 @@ fun SettingsScreen(
     onOpenProvider: (String) -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val context = LocalContext.current
+    var page by remember { mutableStateOf<String?>(null) }
+
+    androidx.compose.animation.AnimatedContent(
+        targetState = page,
+        transitionSpec = {
+            if (targetState != null) {
+                (androidx.compose.animation.slideInHorizontally { it } + androidx.compose.animation.fadeIn()).togetherWith(
+                    androidx.compose.animation.slideOutHorizontally { -it / 3 } + androidx.compose.animation.fadeOut(),
+                )
+            } else {
+                (androidx.compose.animation.slideInHorizontally { -it / 3 } + androidx.compose.animation.fadeIn()).togetherWith(
+                    androidx.compose.animation.slideOutHorizontally { it } + androidx.compose.animation.fadeOut(),
+                )
+            }
+        },
+        label = "settingsPage",
+    ) { current ->
+        when (current) {
+            "appearance" -> SettingsSubPage(title = "主题与外观", onBack = { page = null }) {
+                AppearanceSettingsPage(viewModel)
+            }
+            "profile" -> SettingsSubPage(title = "用户资料", onBack = { page = null }) {
+                ProfileSettingsPage(viewModel)
+            }
+            "chatDisplay" -> SettingsSubPage(title = "聊天显示", onBack = { page = null }) {
+                ChatDisplaySettingsPage(viewModel)
+            }
+            "models" -> SettingsSubPage(title = "模型与 Provider", onBack = { page = null }) {
+                ModelsSettingsPage(viewModel, onOpenProvider)
+            }
+            "title" -> SettingsSubPage(title = "会话与标题", onBack = { page = null }) {
+                TitleSettingsPage(viewModel)
+            }
+            "attachment" -> SettingsSubPage(title = "附件", onBack = { page = null }) {
+                AttachmentSettingsPage(viewModel)
+            }
+            "prompt" -> SettingsSubPage(title = "提示词预设", onBack = { page = null }) {
+                PromptSettingsPage(viewModel)
+            }
+            "quickPhrases" -> SettingsSubPage(title = "快捷短语", onBack = { page = null }) {
+                QuickPhrasesSettingsPage(viewModel)
+            }
+            "usage" -> SettingsSubPage(title = "用量统计", onBack = { page = null }) {
+                UsageSettingsPage(viewModel)
+            }
+            "data" -> SettingsSubPage(title = "数据管理", onBack = { page = null }) {
+                DataSettingsPage(viewModel)
+            }
+            "security" -> SettingsSubPage(title = "安全与隐私", onBack = { page = null }) {
+                SecuritySettingsPage(viewModel)
+            }
+            "about" -> SettingsSubPage(title = "关于", onBack = { page = null }) {
+                AboutSettingsPage()
+            }
+            else -> SettingsHomePage(onBack = onBack, viewModel = viewModel) { page = it }
+        }
+    }
+}
+
+/** 设置主页：iOS 分组导航。 */
+@Composable
+private fun SettingsHomePage(
+    onBack: () -> Unit,
+    viewModel: SettingsViewModel,
+    onOpenPage: (String) -> Unit,
+) {
     val appearance by viewModel.appearance.collectAsStateWithLifecycle()
     val modelBehavior by viewModel.modelBehavior.collectAsStateWithLifecycle()
-    val promptSafety by viewModel.promptSafety.collectAsStateWithLifecycle()
-    val title by viewModel.title.collectAsStateWithLifecycle()
-    val attachment by viewModel.attachment.collectAsStateWithLifecycle()
     val providers by viewModel.providers.collectAsStateWithLifecycle()
-    val modelsByProvider by viewModel.modelsByProvider.collectAsStateWithLifecycle()
-    val presets by viewModel.presets.collectAsStateWithLifecycle()
     val apiKeyStatus by viewModel.apiKeyStatus.collectAsStateWithLifecycle()
-    val usage by viewModel.usageSince30Days.collectAsStateWithLifecycle()
-    val auxUsage by viewModel.auxUsage.collectAsStateWithLifecycle()
-    val balance by viewModel.balance.collectAsStateWithLifecycle()
-    val message by viewModel.message.collectAsStateWithLifecycle()
-    val glass = LocalLiquidGlass.current
+    val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
 
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(message) {
-        message?.let { snackbarHostState.showSnackbar(it); viewModel.consumeMessage() }
+    val themeLabel = when (appearance.themeMode) {
+        ThemeMode.SYSTEM -> "跟随系统"
+        ThemeMode.LIGHT -> "浅色"
+        ThemeMode.DARK -> "深色"
+        ThemeMode.DYNAMIC -> "动态取色"
     }
 
-    val exportConvLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json")
-    ) { uri: Uri? -> uri?.let(viewModel::exportConversations) }
-    val importConvLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? -> uri?.let(viewModel::importConversations) }
-    val exportPresetLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json")
-    ) { uri: Uri? -> uri?.let(viewModel::exportPresets) }
-    val importPresetLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? -> uri?.let(viewModel::importPresets) }
-    val backgroundPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? -> uri?.let(viewModel::setBackgroundImage) }
-
-    var showDefaultModelPicker by remember { mutableStateOf(false) }
-    var showPresetEditor by remember { mutableStateOf<PromptPresetEntity?>(null) }
-    var showClearDataConfirm by remember { mutableStateOf(false) }
-
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("设置") },
@@ -165,441 +212,406 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Spacer(Modifier.height(2.dp))
 
-            // ================= 1. 外观 =================
-            SettingsGroupCard(title = "外观", icon = Icons.Filled.Palette, glassEnabled = glass.enabled) {
-                LabeledSegmentedRow(
-                    label = "主题模式",
-                    options = listOf("跟随系统", "浅色", "深色", "动态取色"),
-                    selectedIndex = appearance.themeMode.ordinal,
-                    optionEnabled = { index -> index != ThemeMode.DYNAMIC.ordinal || android.os.Build.VERSION.SDK_INT >= 31 },
-                ) { index ->
-                    val mode = ThemeMode.entries[index]
-                    if (mode != ThemeMode.DYNAMIC || android.os.Build.VERSION.SDK_INT >= 31) {
-                        viewModel.setAppearance(appearance.copy(themeMode = mode))
-                    }
-                }
-                SettingCaption("Android 12+ 动态取色跟随壁纸")
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                SwitchRow("液态玻璃", appearance.liquidGlassEnabled) {
-                    viewModel.setAppearance(appearance.copy(liquidGlassEnabled = it))
-                }
-                if (appearance.liquidGlassEnabled) {
-                    LabeledSegmentedRow(
-                        label = "玻璃强度",
-                        options = listOf("低", "中", "高"),
-                        selectedIndex = appearance.liquidGlassIntensity.ordinal,
-                    ) { index ->
-                        viewModel.setAppearance(appearance.copy(liquidGlassIntensity = GlassIntensity.entries[index]))
-                    }
-                }
-                SwitchRow("减少动画（尊重系统无障碍）", appearance.reduceMotion) {
-                    viewModel.setAppearance(appearance.copy(reduceMotion = it))
-                }
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                SliderRow(
-                    label = "字体大小",
-                    value = appearance.fontScale,
-                    valueRange = 0.85f..1.3f,
-                    format = { "${(it * 100).toInt()}%" },
-                ) {
-                    viewModel.setAppearance(appearance.copy(fontScale = it))
-                }
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                LabeledSegmentedRow(
-                    label = "聊天背景",
-                    options = listOf("纯色", "渐变", "图片"),
-                    selectedIndex = appearance.chatBackground.ordinal,
-                ) { index ->
-                    viewModel.setAppearance(appearance.copy(chatBackground = ChatBackground.entries[index]))
-                }
-                if (appearance.chatBackground == ChatBackground.IMAGE) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 10.dp),
-                    ) {
-                        val bgFile = File(appearance.backgroundImageUri)
-                        if (appearance.backgroundImageUri.isNotBlank() && bgFile.exists()) {
-                            AsyncImage(
-                                model = bgFile,
-                                contentDescription = "背景预览",
-                                modifier = Modifier
-                                    .size(72.dp)
-                                    .clip(RoundedCornerShape(14.dp)),
-                            )
-                        } else {
-                            Surface(
-                                shape = RoundedCornerShape(14.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                modifier = Modifier.size(72.dp),
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text("未设置", style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            TextButton(onClick = {
-                                backgroundPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            }) { Text("选择图片") }
-                            if (appearance.backgroundImageUri.isNotBlank()) {
-                                TextButton(onClick = viewModel::clearBackgroundImage) { Text("清除图片") }
-                            }
-                        }
-                    }
-                }
+            SectionHeader("通用", first = true)
+            SectionCard {
+                IosNavRow(Icons.Filled.Palette, "主题与外观", detailText = themeLabel) { onOpenPage("appearance") }
+                IosDivider()
+                IosNavRow(Icons.Filled.Person, "用户资料", detailText = userProfile.userName.ifBlank { "未设置" }) { onOpenPage("profile") }
+                IosDivider()
+                IosNavRow(Icons.Filled.ChatBubbleOutline, "聊天显示", detailText = "气泡 / 时间戳 / 滚动按钮") { onOpenPage("chatDisplay") }
             }
 
-            // ================= 2. 模型与 Provider =================
-            SettingsGroupCard(title = "模型与 Provider", icon = Icons.Filled.Memory, glassEnabled = glass.enabled) {
-                providers.forEach { provider ->
-                    val hasKey = apiKeyStatus[provider.id] == true
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable { onOpenProvider(provider.id) }
-                            .padding(horizontal = 4.dp, vertical = 6.dp),
-                    ) {
+            SectionHeader("模型与聊天")
+            SectionCard {
+                IosNavRow(Icons.Filled.Memory, "模型与 Provider", detailText = "${providers.count { it.enabled }} 个可用") { onOpenPage("models") }
+                IosDivider()
+                IosNavRow(Icons.Filled.Title, "会话与标题", detailText = if (modelBehavior.reasoningEffort == ReasoningEffortLevel.NONE) "思考关闭" else "思考开启") { onOpenPage("title") }
+                IosDivider()
+                IosNavRow(Icons.Filled.AttachFile, "附件") { onOpenPage("attachment") }
+            }
+
+            SectionHeader("效率")
+            SectionCard {
+                IosNavRow(Icons.Filled.Notes, "提示词预设") { onOpenPage("prompt") }
+                IosDivider()
+                IosNavRow(Icons.Filled.Bolt, "快捷短语", detailText = "输入栏闪电按钮") { onOpenPage("quickPhrases") }
+            }
+
+            SectionHeader("数据")
+            SectionCard {
+                IosNavRow(Icons.Filled.BarChart, "用量统计") { onOpenPage("usage") }
+                IosDivider()
+                IosNavRow(Icons.Filled.FolderOpen, "数据管理") { onOpenPage("data") }
+                IosDivider()
+                IosNavRow(Icons.Filled.Security, "安全与隐私") { onOpenPage("security") }
+            }
+
+            SectionHeader("关于")
+            SectionCard {
+                IosNavRow(Icons.Filled.Info, "关于 MChat", detailText = "0.1.0") { onOpenPage("about") }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/** 二级页面骨架：返回 + 标题 + 可滚动内容。 */
+@Composable
+private fun SettingsSubPage(
+    title: String,
+    onBack: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(title) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            content()
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/** 外观设置页。 */
+@Composable
+private fun AppearanceSettingsPage(viewModel: SettingsViewModel) {
+    val appearance by viewModel.appearance.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val backgroundPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? -> uri?.let(viewModel::setBackgroundImage) }
+
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            LabeledSegmentedRow(
+                label = "主题模式",
+                options = listOf("跟随系统", "浅色", "深色", "动态取色"),
+                selectedIndex = appearance.themeMode.ordinal,
+                optionEnabled = { index -> index != ThemeMode.DYNAMIC.ordinal || android.os.Build.VERSION.SDK_INT >= 31 },
+            ) { index ->
+                val mode = ThemeMode.entries[index]
+                if (mode != ThemeMode.DYNAMIC || android.os.Build.VERSION.SDK_INT >= 31) {
+                    viewModel.setAppearance(appearance.copy(themeMode = mode))
+                }
+            }
+            SettingCaption("Android 12+ 动态取色跟随壁纸")
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            SwitchRow("液态玻璃", appearance.liquidGlassEnabled) {
+                viewModel.setAppearance(appearance.copy(liquidGlassEnabled = it))
+            }
+            if (appearance.liquidGlassEnabled) {
+                LabeledSegmentedRow(
+                    label = "玻璃强度",
+                    options = listOf("低", "中", "高"),
+                    selectedIndex = appearance.liquidGlassIntensity.ordinal,
+                ) { index ->
+                    viewModel.setAppearance(appearance.copy(liquidGlassIntensity = GlassIntensity.entries[index]))
+                }
+                SettingCaption("iOS 26 风格：vibrancy + 模糊 + 折射透镜（参考 Fluxhub / AndroidLiquidGlass）")
+            }
+            SwitchRow("减少动画（尊重系统无障碍）", appearance.reduceMotion) {
+                viewModel.setAppearance(appearance.copy(reduceMotion = it))
+            }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            SliderRow(
+                label = "字体大小",
+                value = appearance.fontScale,
+                valueRange = 0.85f..1.3f,
+                format = { "${(it * 100).toInt()}%" },
+            ) {
+                viewModel.setAppearance(appearance.copy(fontScale = it))
+            }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            LabeledSegmentedRow(
+                label = "聊天背景",
+                options = listOf("纯色", "渐变", "图片"),
+                selectedIndex = appearance.chatBackground.ordinal,
+            ) { index ->
+                viewModel.setAppearance(appearance.copy(chatBackground = ChatBackground.entries[index]))
+            }
+            if (appearance.chatBackground == ChatBackground.IMAGE) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                ) {
+                    val bgFile = File(appearance.backgroundImageUri)
+                    if (appearance.backgroundImageUri.isNotBlank() && bgFile.exists()) {
+                        AsyncImage(
+                            model = bgFile,
+                            contentDescription = "背景预览",
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(RoundedCornerShape(14.dp)),
+                        )
+                    } else {
                         Surface(
-                            shape = CircleShape,
-                            color = if (provider.id == "deepseek") MaterialTheme.colorScheme.surfaceContainerHighest
-                            else MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.size(38.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            modifier = Modifier.size(72.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                if (provider.id == "deepseek") {
-                                    androidx.compose.foundation.Image(
-                                        painter = androidx.compose.ui.res.painterResource(
-                                            com.ming.mchat.core.theme.R.drawable.deepseek_logo,
-                                        ),
-                                        contentDescription = "DeepSeek logo",
-                                        modifier = Modifier.size(30.dp),
-                                    )
-                                } else {
-                                    Text(
-                                        provider.displayName.take(1),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    )
-                                }
+                                Text("未设置", style = MaterialTheme.typography.labelSmall)
                             }
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(provider.displayName, style = MaterialTheme.typography.bodyLarge)
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    Modifier
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (hasKey) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.error
-                                        )
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    if (hasKey) "API Key 已配置（Keystore 加密）" else "API Key 未配置",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        TextButton(onClick = {
+                            backgroundPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }) { Text("选择图片") }
+                        if (appearance.backgroundImageUri.isNotBlank()) {
+                            TextButton(onClick = viewModel::clearBackgroundImage) { Text("清除图片") }
                         }
-                        Switch(
-                            checked = provider.enabled,
-                            onCheckedChange = { viewModel.setProviderEnabled(provider.id, it) },
-                        )
-                        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                TextButton(
-                    onClick = { onOpenProvider("new") },
-                    modifier = Modifier.padding(start = 4.dp),
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("添加供应商（Base URL / API Key / 模型）")
-                }
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                ListItem(
-                    headlineContent = { Text("默认模型") },
-                    supportingContent = { Text("${modelBehavior.defaultProviderId} / ${modelBehavior.defaultModelId}") },
-                    trailingContent = { Icon(Icons.Filled.ChevronRight, contentDescription = null) },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable { showDefaultModelPicker = true },
-                )
-                SliderRow(
-                    label = "全局 temperature",
-                    value = modelBehavior.globalTemperature.toFloat(),
-                    valueRange = 0f..2f,
-                    format = { "%.2f".format(it) },
-                ) {
-                    viewModel.setModelBehavior(modelBehavior.copy(globalTemperature = it.toDouble()))
-                }
-                LabeledSegmentedRow(
-                    label = "思考强度（聊天页输入栏也可调）",
-                    options = listOf("关闭", "低", "高", "最高"),
-                    selectedIndex = modelBehavior.reasoningEffort.ordinal,
-                ) { index ->
-                    viewModel.setModelBehavior(modelBehavior.copy(reasoningEffort = ReasoningEffortLevel.entries[index]))
-                }
-                SwitchRow("思考过程默认折叠", modelBehavior.collapseReasoning) {
-                    viewModel.setModelBehavior(modelBehavior.copy(collapseReasoning = it))
-                }
-                SettingCaption("折叠时显示思考内容摘要，点击可展开；关闭后始终展开")
-                LabeledSegmentedRow(
-                    label = "输出 Token 上限",
-                    options = listOf("默认", "手动", "自动"),
-                    selectedIndex = modelBehavior.outputTokenMode.ordinal,
-                ) { index ->
-                    viewModel.setModelBehavior(modelBehavior.copy(outputTokenMode = OutputTokenMode.entries[index]))
-                }
-                SettingCaption(
-                    when (modelBehavior.outputTokenMode) {
-                        OutputTokenMode.DEFAULT -> "默认不设限（不发送 max_tokens，推荐）"
-                        OutputTokenMode.MANUAL -> "手动指定 ${modelBehavior.outputTokenManualValue} tokens"
-                        OutputTokenMode.AUTO -> "自动安全上限（上下文窗口的 50%）"
-                    }
-                )
-                if (modelBehavior.outputTokenMode == OutputTokenMode.MANUAL) {
-                    var manual by remember(modelBehavior.outputTokenManualValue) {
-                        mutableStateOf(modelBehavior.outputTokenManualValue.toString())
-                    }
-                    OutlinedTextField(
-                        value = manual,
-                        onValueChange = {
-                            manual = it
-                            it.toIntOrNull()?.let { v ->
-                                viewModel.setModelBehavior(modelBehavior.copy(outputTokenManualValue = v.coerceIn(64, 131072)))
-                            }
-                        },
-                        label = { Text("手动输出上限（tokens）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                DeepSeekBalanceCard(
-                    balance = balance,
-                    threshold = modelBehavior.lowBalanceThreshold,
-                    onRefresh = viewModel::refreshBalance,
-                    onThresholdChange = {
-                        viewModel.setModelBehavior(modelBehavior.copy(lowBalanceThreshold = it))
-                    },
-                )
             }
+        }
+    }
+}
 
-            // ================= 3. 提示词 =================
-            SettingsGroupCard(title = "提示词", icon = Icons.Filled.Notes, glassEnabled = glass.enabled) {
-                if (promptSafety.defaultPresetId > 0) {
-                    SettingCaption("全局默认预设：${presets.firstOrNull { it.id == promptSafety.defaultPresetId }?.name ?: "未知"}")
-                }
-                presets.forEach { preset ->
-                    val isDefault = promptSafety.defaultPresetId == preset.id
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable { viewModel.setDefaultPreset(preset.id) }
-                            .padding(horizontal = 4.dp, vertical = 4.dp),
+/** 用户资料页（kelivo user profile）：用户名 + 头像 emoji。 */
+@Composable
+private fun ProfileSettingsPage(viewModel: SettingsViewModel) {
+    val profile by viewModel.userProfile.collectAsStateWithLifecycle()
+    val emojis = listOf("🦉", "🐼", "🦊", "🐧", "🐳", "🍀", "⭐️", "🌙", "🤖", "🎨", "📚", "🧭")
+    SectionCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            var name by remember(profile.userName) { mutableStateOf(profile.userName) }
+            OutlinedTextField(
+                value = name,
+                onValueChange = {
+                    name = it
+                    viewModel.setUserProfile(profile.copy(userName = it))
+                },
+                label = { Text("用户名（展示在抽屉与消息头部）") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("头像", style = MaterialTheme.typography.bodyMedium)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+            ) {
+                emojis.forEach { emoji ->
+                    Surface(
+                        onClick = { viewModel.setUserProfile(profile.copy(avatarEmoji = emoji)) },
+                        shape = CircleShape,
+                        color = if (profile.avatarEmoji == emoji) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.appSurfaces.surfaceFill,
+                        modifier = Modifier.size(44.dp),
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                preset.name + if (isDefault) "（默认）" else "",
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            if (preset.description.isNotBlank()) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(emoji, fontSize = androidx.compose.ui.unit.TextUnit(20f, androidx.compose.ui.unit.TextUnitType.Sp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 聊天显示页：气泡风格 / 时间戳 / 滚动导航按钮（kelivo message_style_settings）。 */
+@Composable
+private fun ChatDisplaySettingsPage(viewModel: SettingsViewModel) {
+    val display by viewModel.chatDisplay.collectAsStateWithLifecycle()
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            LabeledSegmentedRow(
+                label = "聊天气泡风格",
+                options = listOf("磨砂", "实底"),
+                selectedIndex = display.bubbleStyle.ordinal,
+            ) { index ->
+                viewModel.setChatDisplay(display.copy(bubbleStyle = com.ming.mchat.core.data.datastore.BubbleStyle.entries[index]))
+            }
+            SettingCaption("磨砂：半透明 + 发丝描边（kelivo frosted）；实底：不透明卡片")
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            SwitchRow("显示消息时间戳", display.showTimestamp) {
+                viewModel.setChatDisplay(display.copy(showTimestamp = it))
+            }
+            SwitchRow("滚动导航按钮（回到底部 / 上一条提问）", display.showMessageNavButtons) {
+                viewModel.setChatDisplay(display.copy(showMessageNavButtons = it))
+            }
+        }
+    }
+}
+
+/** 模型与 Provider 页。 */
+@Composable
+private fun ModelsSettingsPage(viewModel: SettingsViewModel, onOpenProvider: (String) -> Unit) {
+    val modelBehavior by viewModel.modelBehavior.collectAsStateWithLifecycle()
+    val providers by viewModel.providers.collectAsStateWithLifecycle()
+    val modelsByProvider by viewModel.modelsByProvider.collectAsStateWithLifecycle()
+    val apiKeyStatus by viewModel.apiKeyStatus.collectAsStateWithLifecycle()
+    val balance by viewModel.balance.collectAsStateWithLifecycle()
+    var showDefaultModelPicker by remember { mutableStateOf(false) }
+
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            providers.forEach { provider ->
+                val hasKey = apiKeyStatus[provider.id] == true
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onOpenProvider(provider.id) }
+                        .padding(horizontal = 4.dp, vertical = 6.dp),
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (provider.id == BalanceService.DEEPSEEK_ID) MaterialTheme.colorScheme.surfaceContainerHighest
+                        else MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(38.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (provider.id == BalanceService.DEEPSEEK_ID) {
+                                androidx.compose.foundation.Image(
+                                    painter = androidx.compose.ui.res.painterResource(
+                                        com.ming.mchat.core.theme.R.drawable.deepseek_logo,
+                                    ),
+                                    contentDescription = "DeepSeek logo",
+                                    modifier = Modifier.size(30.dp),
+                                )
+                            } else {
                                 Text(
-                                    preset.description,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
+                                    provider.displayName.take(1),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 )
                             }
                         }
-                        IconButton(onClick = { showPresetEditor = preset }) {
-                            Icon(Icons.Filled.Edit, contentDescription = "编辑", modifier = Modifier.size(18.dp))
-                        }
-                        IconButton(onClick = { viewModel.deletePreset(preset.id) }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(provider.displayName, style = MaterialTheme.typography.bodyLarge)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (hasKey) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.error
+                                    )
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (hasKey) "API Key 已配置（Keystore 加密）" else "API Key 未配置",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { showPresetEditor = PromptPresetEntity(id = 0L, name = "", systemPrompt = "") }) {
-                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp)); Text("新建")
-                    }
-                    TextButton(onClick = { exportPresetLauncher.launch("mchat-presets.json") }) { Text("导出") }
-                    TextButton(onClick = { importPresetLauncher.launch(arrayOf("application/json")) }) { Text("导入") }
-                }
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                SwitchRow("追加全局 system prompt", promptSafety.appendGlobalSystemPrompt) {
-                    viewModel.setPromptSafety(promptSafety.copy(appendGlobalSystemPrompt = it))
-                }
-                var globalPrompt by remember(promptSafety.globalSystemPrompt) { mutableStateOf(promptSafety.globalSystemPrompt) }
-                OutlinedTextField(
-                    value = globalPrompt,
-                    onValueChange = {
-                        globalPrompt = it
-                        viewModel.setPromptSafety(promptSafety.copy(globalSystemPrompt = it))
-                    },
-                    label = { Text("全局 system prompt") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                SwitchRow("附件安全声明（默认开）", promptSafety.attachmentSafetyNoticeEnabled) {
-                    viewModel.setPromptSafety(promptSafety.copy(attachmentSafetyNoticeEnabled = it))
+                    Switch(
+                        checked = provider.enabled,
+                        onCheckedChange = { viewModel.setProviderEnabled(provider.id, it) },
+                    )
+                    Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-
-            // ================= 4. 会话与标题 =================
-            SettingsGroupCard(title = "会话与标题", icon = Icons.Filled.Title, glassEnabled = glass.enabled) {
-                SwitchRow("AI 生成标题", title.titleGenEnabled) {
-                    viewModel.setTitle(title.copy(titleGenEnabled = it))
-                }
-                SettingCaption(
-                    if (title.titleGenModelId.isBlank()) "标题模型：自动（选最便宜的非推理模型）"
-                    else "标题模型：${title.titleGenProviderId} / ${title.titleGenModelId}"
-                )
-                LabeledSegmentedRow(
-                    label = "标题语言",
-                    options = listOf("自动", "中文", "英文"),
-                    selectedIndex = title.titleGenLanguage.ordinal,
-                ) { index ->
-                    viewModel.setTitle(title.copy(titleGenLanguage = TitleLanguage.entries[index]))
-                }
-                TextButton(onClick = viewModel::regenerateAllTitles) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp)); Text("重新生成所有自动标题")
-                }
+            TextButton(
+                onClick = { onOpenProvider("new") },
+                modifier = Modifier.padding(start = 4.dp),
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("添加供应商（Base URL / API Key / 模型）")
             }
-
-            // ================= 5. 附件 =================
-            SettingsGroupCard(title = "附件", icon = Icons.Filled.AttachFile, glassEnabled = glass.enabled) {
-                LabeledSegmentedRow(
-                    label = "图片最大长边",
-                    options = listOf("1024", "1568", "2048"),
-                    selectedIndex = listOf(1024, 1568, 2048).indexOf(attachment.imageMaxLongEdge).coerceAtLeast(0),
-                ) { index ->
-                    viewModel.setAttachment(attachment.copy(imageMaxLongEdge = listOf(1024, 1568, 2048)[index]))
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            ListItem(
+                headlineContent = { Text("默认模型") },
+                supportingContent = { Text("${modelBehavior.defaultProviderId} / ${modelBehavior.defaultModelId}") },
+                trailingContent = { Icon(Icons.Filled.ChevronRight, contentDescription = null) },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { showDefaultModelPicker = true },
+            )
+            SliderRow(
+                label = "全局 temperature",
+                value = modelBehavior.globalTemperature.toFloat(),
+                valueRange = 0f..2f,
+                format = { "%.2f".format(it) },
+            ) {
+                viewModel.setModelBehavior(modelBehavior.copy(globalTemperature = it.toDouble()))
+            }
+            LabeledSegmentedRow(
+                label = "思考强度（聊天页输入栏也可调）",
+                options = listOf("关闭", "低", "高", "最高"),
+                selectedIndex = modelBehavior.reasoningEffort.ordinal,
+            ) { index ->
+                viewModel.setModelBehavior(modelBehavior.copy(reasoningEffort = ReasoningEffortLevel.entries[index]))
+            }
+            SwitchRow("思考过程默认折叠", modelBehavior.collapseReasoning) {
+                viewModel.setModelBehavior(modelBehavior.copy(collapseReasoning = it))
+            }
+            SettingCaption("折叠时显示思考内容摘要，点击可展开（animateContentSize 动画）；关闭后始终展开")
+            LabeledSegmentedRow(
+                label = "输出 Token 上限",
+                options = listOf("默认", "手动", "自动"),
+                selectedIndex = modelBehavior.outputTokenMode.ordinal,
+            ) { index ->
+                viewModel.setModelBehavior(modelBehavior.copy(outputTokenMode = OutputTokenMode.entries[index]))
+            }
+            SettingCaption(
+                when (modelBehavior.outputTokenMode) {
+                    OutputTokenMode.DEFAULT -> "默认不设限（不发送 max_tokens，推荐）"
+                    OutputTokenMode.MANUAL -> "手动指定 ${modelBehavior.outputTokenManualValue} tokens"
+                    OutputTokenMode.AUTO -> "自动安全上限（上下文窗口的 50%）"
                 }
-                SliderRow(
-                    label = "JPEG 质量",
-                    value = attachment.jpegQuality.toFloat(),
-                    valueRange = 40f..100f,
-                    format = { "${it.toInt()}" },
-                ) {
-                    viewModel.setAttachment(attachment.copy(jpegQuality = it.toInt()))
+            )
+            if (modelBehavior.outputTokenMode == OutputTokenMode.MANUAL) {
+                var manual by remember(modelBehavior.outputTokenManualValue) {
+                    mutableStateOf(modelBehavior.outputTokenManualValue.toString())
                 }
-                LabeledSegmentedRow(
-                    label = "单图大小上限",
-                    options = listOf("2MB", "4MB", "8MB"),
-                    selectedIndex = listOf(2L, 4L, 8L).indexOf(attachment.imageMaxBytes / (1024 * 1024)).coerceAtLeast(0),
-                ) { index ->
-                    viewModel.setAttachment(attachment.copy(imageMaxBytes = listOf(2L, 4L, 8L)[index] * 1024 * 1024))
-                }
-                var pdfMax by remember(attachment.pdfMaxChars) { mutableStateOf(attachment.pdfMaxChars.toString()) }
                 OutlinedTextField(
-                    value = pdfMax,
+                    value = manual,
                     onValueChange = {
-                        pdfMax = it
+                        manual = it
                         it.toIntOrNull()?.let { v ->
-                            viewModel.setAttachment(attachment.copy(pdfMaxChars = v.coerceIn(1000, 500000)))
+                            viewModel.setModelBehavior(modelBehavior.copy(outputTokenManualValue = v.coerceIn(64, 131072)))
                         }
                     },
-                    label = { Text("PDF 字数上限") },
+                    label = { Text("手动输出上限（tokens）") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                SwitchRow("自动剥离 EXIF", attachment.stripExif) {
-                    viewModel.setAttachment(attachment.copy(stripExif = it))
-                }
-                TextButton(onClick = viewModel::clearAttachmentCache) { Text("清理附件缓存") }
             }
-
-            // ================= 6. 用量统计 =================
-            SettingsGroupCard(title = "用量统计", icon = Icons.Filled.BarChart, glassEnabled = glass.enabled) {
-                if (usage.isEmpty()) {
-                    SettingCaption("近 30 天暂无记录")
-                } else {
-                    usage.take(12).forEach { row ->
-                        ListItem(
-                            headlineContent = { Text("${row.day} · ${row.model}") },
-                            supportingContent = { Text("输入 ${row.promptTokens} · 输出 ${row.completionTokens} · ${row.requestCount} 次") },
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        )
-                    }
-                }
-                val auxTotal = auxUsage.sumOf { it.totalTokens }
-                SettingCaption("辅助消耗（标题/测试连接）：$auxTotal tokens · ${auxUsage.size} 次")
-                TextButton(onClick = viewModel::clearUsageStats) { Text("清空统计") }
-            }
-
-            // ================= 7. 安全与隐私 =================
-            SettingsGroupCard(title = "安全与隐私", icon = Icons.Filled.Security, glassEnabled = glass.enabled) {
-                SettingCaption("API Key 使用 Android Keystore（AES/GCM）加密存储，数据库仅保存密文引用，绝不明文落盘。")
-                SwitchRow("注入扫描（只提示不删除）", promptSafety.injectionScanEnabled) {
-                    viewModel.setPromptSafety(promptSafety.copy(injectionScanEnabled = it))
-                }
-                SettingCaption("网络日志默认关闭；LLM 输出永远不会直接执行系统命令。")
-                TextButton(onClick = { showClearDataConfirm = true }) {
-                    Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(16.dp)); Text("一键清除本地会话数据")
-                }
-            }
-
-            // ================= 8. 数据管理 =================
-            SettingsGroupCard(title = "数据管理", icon = Icons.Filled.FolderOpen, glassEnabled = glass.enabled) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { exportConvLauncher.launch("mchat-conversations.json") }) { Text("导出会话") }
-                    TextButton(onClick = { importConvLauncher.launch(arrayOf("application/json")) }) { Text("导入会话") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { exportPresetLauncher.launch("mchat-presets.json") }) { Text("导出预设") }
-                    TextButton(onClick = viewModel::clearAttachmentCache) { Text("清除附件缓存") }
-                }
-            }
-
-            // ================= 9. 关于 =================
-            SettingsGroupCard(title = "关于", icon = Icons.Filled.Info, glassEnabled = glass.enabled) {
-                ListItem(
-                    headlineContent = { Text("版本") },
-                    supportingContent = { Text("0.1.0（versionCode 1，全程锁定）") },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                )
-                ListItem(
-                    headlineContent = { Text("包名") },
-                    supportingContent = { Text("com.ming.mchat") },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                )
-                ListItem(
-                    headlineContent = { Text("GitHub 仓库") },
-                    supportingContent = { Text("Ming-QWQ520/MChat") },
-                    trailingContent = { Icon(Icons.Filled.ChevronRight, contentDescription = null) },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable {
-                            runCatching {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, "https://github.com/Ming-QWQ520/MChat".toUri()))
-                            }
-                        },
-                )
-                SettingCaption("隐私说明：所有数据仅保存在本机；API Key 加密存储；不经用户允许不发送任何遥测。")
-                SettingCaption("开源许可：Apache-2.0（openai-kotlin / Ktor / PdfBox-Android / JTokkit / Coil）与 MIT（Compose 生态相关项目）")
-            }
-            Spacer(Modifier.height(24.dp))
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            DeepSeekBalanceCard(
+                balance = balance,
+                threshold = modelBehavior.lowBalanceThreshold,
+                onRefresh = viewModel::refreshBalance,
+                onThresholdChange = {
+                    viewModel.setModelBehavior(modelBehavior.copy(lowBalanceThreshold = it))
+                },
+            )
         }
     }
 
@@ -613,6 +625,161 @@ fun SettingsScreen(
             onDismiss = { showDefaultModelPicker = false },
         )
     }
+}
+
+/** 会话与标题页。 */
+@Composable
+private fun TitleSettingsPage(viewModel: SettingsViewModel) {
+    val title by viewModel.title.collectAsStateWithLifecycle()
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            SwitchRow("AI 生成标题", title.titleGenEnabled) {
+                viewModel.setTitle(title.copy(titleGenEnabled = it))
+            }
+            SettingCaption(
+                if (title.titleGenModelId.isBlank()) "标题模型：自动（选最便宜的非推理模型）"
+                else "标题模型：${title.titleGenProviderId} / ${title.titleGenModelId}"
+            )
+            LabeledSegmentedRow(
+                label = "标题语言",
+                options = listOf("自动", "中文", "英文"),
+                selectedIndex = title.titleGenLanguage.ordinal,
+            ) { index ->
+                viewModel.setTitle(title.copy(titleGenLanguage = TitleLanguage.entries[index]))
+            }
+            TextButton(onClick = viewModel::regenerateAllTitles) {
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp)); Text("重新生成所有自动标题")
+            }
+        }
+    }
+}
+
+/** 附件页。 */
+@Composable
+private fun AttachmentSettingsPage(viewModel: SettingsViewModel) {
+    val attachment by viewModel.attachment.collectAsStateWithLifecycle()
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            LabeledSegmentedRow(
+                label = "图片最大长边",
+                options = listOf("1024", "1568", "2048"),
+                selectedIndex = listOf(1024, 1568, 2048).indexOf(attachment.imageMaxLongEdge).coerceAtLeast(0),
+            ) { index ->
+                viewModel.setAttachment(attachment.copy(imageMaxLongEdge = listOf(1024, 1568, 2048)[index]))
+            }
+            SliderRow(
+                label = "JPEG 质量",
+                value = attachment.jpegQuality.toFloat(),
+                valueRange = 40f..100f,
+                format = { "${it.toInt()}" },
+            ) {
+                viewModel.setAttachment(attachment.copy(jpegQuality = it.toInt()))
+            }
+            LabeledSegmentedRow(
+                label = "单图大小上限",
+                options = listOf("2MB", "4MB", "8MB"),
+                selectedIndex = listOf(2L, 4L, 8L).indexOf(attachment.imageMaxBytes / (1024 * 1024)).coerceAtLeast(0),
+            ) { index ->
+                viewModel.setAttachment(attachment.copy(imageMaxBytes = listOf(2L, 4L, 8L)[index] * 1024 * 1024))
+            }
+            var pdfMax by remember(attachment.pdfMaxChars) { mutableStateOf(attachment.pdfMaxChars.toString()) }
+            OutlinedTextField(
+                value = pdfMax,
+                onValueChange = {
+                    pdfMax = it
+                    it.toIntOrNull()?.let { v ->
+                        viewModel.setAttachment(attachment.copy(pdfMaxChars = v.coerceIn(1000, 500000)))
+                    }
+                },
+                label = { Text("PDF 字数上限") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SwitchRow("自动剥离 EXIF", attachment.stripExif) {
+                viewModel.setAttachment(attachment.copy(stripExif = it))
+            }
+            TextButton(onClick = viewModel::clearAttachmentCache) { Text("清理附件缓存") }
+        }
+    }
+}
+
+/** 提示词预设页。 */
+@Composable
+private fun PromptSettingsPage(viewModel: SettingsViewModel) {
+    val promptSafety by viewModel.promptSafety.collectAsStateWithLifecycle()
+    val presets by viewModel.presets.collectAsStateWithLifecycle()
+    var showPresetEditor by remember { mutableStateOf<PromptPresetEntity?>(null) }
+    val exportPresetLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? -> uri?.let(viewModel::exportPresets) }
+    val importPresetLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? -> uri?.let(viewModel::importPresets) }
+
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            if (promptSafety.defaultPresetId > 0) {
+                SettingCaption("全局默认预设：${presets.firstOrNull { it.id == promptSafety.defaultPresetId }?.name ?: "未知"}")
+            }
+            presets.forEach { preset ->
+                val isDefault = promptSafety.defaultPresetId == preset.id
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { viewModel.setDefaultPreset(preset.id) }
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            preset.name + if (isDefault) "（默认）" else "",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        if (preset.description.isNotBlank()) {
+                            Text(
+                                preset.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    IconButton(onClick = { showPresetEditor = preset }) {
+                        Icon(Icons.Filled.Edit, contentDescription = "编辑", modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = { viewModel.deletePreset(preset.id) }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { showPresetEditor = PromptPresetEntity(id = 0L, name = "", systemPrompt = "") }) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp)); Text("新建")
+                }
+                TextButton(onClick = { exportPresetLauncher.launch("mchat-presets.json") }) { Text("导出") }
+                TextButton(onClick = { importPresetLauncher.launch(arrayOf("application/json")) }) { Text("导入") }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            SwitchRow("追加全局 system prompt", promptSafety.appendGlobalSystemPrompt) {
+                viewModel.setPromptSafety(promptSafety.copy(appendGlobalSystemPrompt = it))
+            }
+            var globalPrompt by remember(promptSafety.globalSystemPrompt) { mutableStateOf(promptSafety.globalSystemPrompt) }
+            OutlinedTextField(
+                value = globalPrompt,
+                onValueChange = {
+                    globalPrompt = it
+                    viewModel.setPromptSafety(promptSafety.copy(globalSystemPrompt = it))
+                },
+                label = { Text("全局 system prompt") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SwitchRow("附件安全声明（默认开）", promptSafety.attachmentSafetyNoticeEnabled) {
+                viewModel.setPromptSafety(promptSafety.copy(attachmentSafetyNoticeEnabled = it))
+            }
+        }
+    }
 
     showPresetEditor?.let { preset ->
         PresetEditorDialog(
@@ -624,7 +791,120 @@ fun SettingsScreen(
             },
         )
     }
+}
 
+/** 快捷短语页（kelivo quick phrases）：内置 + 自定义管理。 */
+@Composable
+private fun QuickPhrasesSettingsPage(viewModel: SettingsViewModel) {
+    val customPhrases by viewModel.customQuickPhrases.collectAsStateWithLifecycle()
+    var newPhrase by remember { mutableStateOf("") }
+    SectionCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("内置短语（不可删除）", style = MaterialTheme.typography.labelLarge)
+            Text(
+                com.ming.mchat.core.common.BuiltinQuickPhrases.ALL.joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+            Text("自定义短语", style = MaterialTheme.typography.labelLarge)
+            customPhrases.forEach { phrase ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(phrase, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { viewModel.removeQuickPhrase(phrase) }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = newPhrase,
+                    onValueChange = { newPhrase = it },
+                    placeholder = { Text("新短语") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                TextButton(
+                    onClick = {
+                        viewModel.addQuickPhrase(newPhrase)
+                        newPhrase = ""
+                    },
+                    enabled = newPhrase.isNotBlank(),
+                ) { Text("添加") }
+            }
+            SettingCaption("输入栏闪电按钮展开短语行，点击填入输入框")
+        }
+    }
+}
+
+/** 用量统计页。 */
+@Composable
+private fun UsageSettingsPage(viewModel: SettingsViewModel) {
+    val usage by viewModel.usageSince30Days.collectAsStateWithLifecycle()
+    val auxUsage by viewModel.auxUsage.collectAsStateWithLifecycle()
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            if (usage.isEmpty()) {
+                SettingCaption("近 30 天暂无记录")
+            } else {
+                usage.take(12).forEach { row ->
+                    ListItem(
+                        headlineContent = { Text("${row.day} · ${row.model}") },
+                        supportingContent = { Text("输入 ${row.promptTokens} · 输出 ${row.completionTokens} · ${row.requestCount} 次") },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    )
+                }
+            }
+            val auxTotal = auxUsage.sumOf { it.totalTokens }
+            SettingCaption("辅助消耗（标题/测试连接）：$auxTotal tokens · ${auxUsage.size} 次")
+            TextButton(onClick = viewModel::clearUsageStats) { Text("清空统计") }
+        }
+    }
+}
+
+/** 数据管理页。 */
+@Composable
+private fun DataSettingsPage(viewModel: SettingsViewModel) {
+    val exportConvLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? -> uri?.let(viewModel::exportConversations) }
+    val importConvLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? -> uri?.let(viewModel::importConversations) }
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { exportConvLauncher.launch("mchat-conversations.json") }) { Text("导出会话") }
+                TextButton(onClick = { importConvLauncher.launch(arrayOf("application/json")) }) { Text("导入会话") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = viewModel::clearAttachmentCache) { Text("清除附件缓存") }
+            }
+        }
+    }
+}
+
+/** 安全与隐私页。 */
+@Composable
+private fun SecuritySettingsPage(viewModel: SettingsViewModel) {
+    val promptSafety by viewModel.promptSafety.collectAsStateWithLifecycle()
+    var showClearDataConfirm by remember { mutableStateOf(false) }
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            SettingCaption("API Key 使用 Android Keystore（AES/GCM）加密存储，数据库仅保存密文引用，绝不明文落盘。")
+            SwitchRow("注入扫描（只提示不删除）", promptSafety.injectionScanEnabled) {
+                viewModel.setPromptSafety(promptSafety.copy(injectionScanEnabled = it))
+            }
+            SettingCaption("网络日志默认关闭（openai-kotlin LogLevel.None）；LLM 输出永远不会直接执行系统命令。")
+            TextButton(onClick = { showClearDataConfirm = true }) {
+                Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(16.dp)); Text("一键清除本地会话数据")
+            }
+        }
+    }
     if (showClearDataConfirm) {
         AlertDialog(
             onDismissRequest = { showClearDataConfirm = false },
@@ -638,56 +918,43 @@ fun SettingsScreen(
     }
 }
 
-// ===================== 通用组件 =====================
-
-/** 分组卡片：图标 + 标题 + 内容；液态玻璃开启时使用玻璃容器。 */
+/** 关于页。 */
 @Composable
-private fun SettingsGroupCard(
-    title: String,
-    icon: ImageVector,
-    glassEnabled: Boolean,
-    content: @Composable () -> Unit,
-) {
-    val header: @Composable () -> Unit = {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 12.dp),
-        ) {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(30.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        icon,
-                        contentDescription = null,
-                        modifier = Modifier.size(17.dp),
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                }
-            }
-            Spacer(Modifier.width(10.dp))
-            Text(title, style = MaterialTheme.typography.titleMedium)
-        }
-    }
-    val body: @Composable () -> Unit = {
+private fun AboutSettingsPage() {
+    val context = LocalContext.current
+    SectionCard {
         Column(Modifier.padding(16.dp)) {
-            header()
-            content()
+            ListItem(
+                headlineContent = { Text("版本") },
+                supportingContent = { Text("0.1.0（versionCode 1，全程锁定）") },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            )
+            ListItem(
+                headlineContent = { Text("包名") },
+                supportingContent = { Text("com.ming.mchat") },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            )
+            ListItem(
+                headlineContent = { Text("GitHub 仓库") },
+                supportingContent = { Text("Ming-QWQ520/MChat") },
+                trailingContent = { Icon(Icons.Filled.ChevronRight, contentDescription = null) },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, "https://github.com/Ming-QWQ520/MChat".toUri()))
+                        }
+                    },
+            )
+            SettingCaption("隐私说明：所有数据仅保存在本机；API Key 加密存储；不经用户允许不发送任何遥测。")
+            SettingCaption("开源许可：Apache-2.0（openai-kotlin / Ktor / AndroidLiquidGlass(backdrop) / PdfBox-Android / JTokkit）与 MIT（Compose 生态相关项目）")
+            SettingCaption("UI 参考致谢：kelivo（设置 / 对话 / 侧边栏交互）、Fluxhub（液态玻璃）")
         }
-    }
-    if (glassEnabled) {
-        LiquidGlassSurface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), content = body)
-    } else {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            content = body,
-        )
     }
 }
+
+// ===================== 通用组件 =====================
 
 /** 开关行。 */
 @Composable

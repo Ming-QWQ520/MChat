@@ -84,10 +84,27 @@ data class ChatUiState(
     val backgroundImageUri: String = "",
     val providers: List<ProviderConfigEntity> = emptyList(),
     val modelsByProvider: Map<String, List<ModelConfigEntity>> = emptyMap(),
+    /** 临时对话（kelivo：不落库，退出即焚）。 */
+    val isTemporary: Boolean = false,
+    /** 临时对话的内存消息（id 为负数，避免与数据库 id 冲突）。 */
+    val tempMessages: List<MessageEntity> = emptyList(),
+    /** 进入临时模式前的会话 id（退出临时模式时恢复）。 */
+    val preTemporaryConversationId: Long = 0L,
+    /** 展示设置（kelivo：气泡风格 / 时间戳 / 滚动导航按钮）。 */
+    val bubbleStyle: com.ming.mchat.core.data.datastore.BubbleStyle = com.ming.mchat.core.data.datastore.BubbleStyle.FROSTED,
+    val showTimestamp: Boolean = true,
+    val showNavButtons: Boolean = true,
+    /** 用户资料（kelivo：用户名 / 头像 emoji）。 */
+    val userName: String = "",
+    val userAvatarEmoji: String = "🦉",
+    /** 快捷短语（内置 + 自定义）。 */
+    val quickPhrases: List<String> = emptyList(),
 ) {
     val isDeepSeek: Boolean get() = providerId == BalanceService.DEEPSEEK_ID
     /** 是否展示低余额提示条（未关闭且余额确实低）。 */
     val showLowBalanceNotice: Boolean get() = isDeepSeek && lowBalance && !lowBalanceDismissed
+    /** 展示用消息列表：临时模式用内存消息，否则用数据库消息。 */
+    val displayMessages: List<MessageEntity> get() = if (isTemporary) tempMessages else messages
 }
 
 @HiltViewModel
@@ -192,6 +209,25 @@ class ChatViewModel @Inject constructor(
                 }
             }
         }
+        // 展示设置 + 用户资料 + 快捷短语（kelivo）
+        viewModelScope.launch {
+            combine(
+                settingsRepository.chatDisplay,
+                settingsRepository.userProfile,
+                settingsRepository.quickPhrases,
+            ) { display, profile, phrases -> Triple(display, profile, phrases) }.collect { (display, profile, phrases) ->
+                _uiState.update {
+                    it.copy(
+                        bubbleStyle = display.bubbleStyle,
+                        showTimestamp = display.showTimestamp,
+                        showNavButtons = display.showMessageNavButtons,
+                        userName = profile.userName,
+                        userAvatarEmoji = profile.avatarEmoji,
+                        quickPhrases = (BUILTIN_QUICK_PHRASES + phrases).distinct(),
+                    )
+                }
+            }
+        }
         // 余额 + 低余额阈值：余额数据刷新（updatedAt 变化）时重置“已关闭提示”标记
         viewModelScope.launch {
             combine(balanceService.state, settingsRepository.modelBehavior) { balance, behavior ->
@@ -262,6 +298,27 @@ class ChatViewModel @Inject constructor(
         val snapshot = _uiState.value
         if (snapshot.isStreaming) return
 
+        // 临时对话：不落库，内存消息 + 直接流式
+        if (snapshot.isTemporary) {
+            val tempId = tempIdCounter.getAndDecrement()
+            val userMessage = MessageEntity(
+                id = tempId,
+                conversationId = -1L,
+                role = Role.USER,
+                content = text,
+                createdAt = System.currentTimeMillis(),
+            )
+            _uiState.update {
+                it.copy(
+                    tempMessages = it.tempMessages + userMessage,
+                    input = "",
+                    pendingAttachments = emptyList(),
+                )
+            }
+            launchStream(-1L, tempId, temporary = true)
+            return
+        }
+
         val conversationId = if (snapshot.conversationId == 0L) {
             val behavior = settingsRepository.modelBehavior.first()
             val conversation = conversationRepository.create(
@@ -295,12 +352,31 @@ class ChatViewModel @Inject constructor(
         }
 
         _uiState.update { it.copy(input = "", pendingAttachments = emptyList()) }
-        launchStream(conversationId, userId)
+        launchStream(conversationId, userId, temporary = false)
+    }
+
+    /** 编辑后重发（kelivo / Chatbox）：更新该条用户消息内容，删除其后全部消息，重新流式。 */
+    fun editAndResend(messageId: Long, newContent: String) {
+        val state = _uiState.value
+        if (state.isStreaming || state.conversationId == 0L || newContent.isBlank()) return
+        viewModelScope.launch {
+            messageRepository.editAndTruncateAfter(state.conversationId, messageId, newContent.trim())
+            launchStream(state.conversationId, messageId, temporary = false)
+        }
+    }
+
+    /** 快捷短语：直接填入输入框（已有内容则另起一行）。 */
+    fun applyQuickPhrase(phrase: String) {
+        _uiState.update {
+            val base = it.input
+            val next = if (base.isBlank()) phrase else base + "\n" + phrase
+            it.copy(input = next)
+        }
     }
 
     // ---------------- 流式请求 ----------------
 
-    private fun launchStream(conversationId: Long, latestUserMessageId: Long) {
+    private fun launchStream(conversationId: Long, latestUserMessageId: Long, temporary: Boolean) {
         streamJob = viewModelScope.launch {
             val state = _uiState.value
             val behavior = settingsRepository.modelBehavior.first()
@@ -316,10 +392,15 @@ class ChatViewModel @Inject constructor(
                 return@launch
             }
 
-            // 历史消息（含当前轮）
-            val history = messageRepository.getByConversation(conversationId)
-            val currentAttachments = attachmentRepository.attachmentsForMessage(latestUserMessageId)
-            val conversation = conversationRepository.getById(conversationId)
+            // 历史消息（含当前轮）：临时模式用内存消息，正常模式读库
+            val history = if (temporary) state.tempMessages else messageRepository.getByConversation(conversationId)
+            val currentAttachments = if (temporary) {
+                // 临时模式：发送时 pendingAttachments 已清空，从最近一条用户消息上下文取不到附件，直接忽略
+                emptyList<com.ming.mchat.core.data.entity.AttachmentEntity>()
+            } else {
+                attachmentRepository.attachmentsForMessage(latestUserMessageId)
+            }
+            val conversation = if (temporary) null else conversationRepository.getById(conversationId)
             val resolved = promptResolver.resolve(
                 conversation = conversation,
                 modelId = model.modelId,
@@ -436,7 +517,7 @@ class ChatViewModel @Inject constructor(
                     }
                 }
             } catch (c: CancellationException) {
-                // 用户主动停止：保存已生成的部分内容（NonCancellable 保证落库完成）
+                // 用户主动停止：保存已生成的部分内容（NonCancellable 保证落库完成；临时模式仅存内存）
                 uiRefresher.cancel()
                 _uiState.update {
                     it.copy(
@@ -446,18 +527,22 @@ class ChatViewModel @Inject constructor(
                 }
                 val partialContent = contentBuilder.toString()
                 val partialReasoning = reasoningBuilder.toString()
-                withContext(NonCancellable + Dispatchers.IO) {
-                    persistAssistantMessage(
-                        conversationId = conversationId,
-                        model = model,
-                        content = partialContent,
-                        reasoningContent = partialReasoning.ifBlank { null },
-                        reasoningTokens = tokenEstimator.estimateTokens(partialReasoning, model.modelId),
-                        usage = serverUsage,
-                        estimatedPromptTokens = estimatedPromptTokens,
-                        startedAt = startedAt,
-                        finishReason = "cancelled",
-                    )
+                if (temporary) {
+                    appendTempAssistant(partialContent, partialReasoning, model.modelId, startedAt, serverUsage, estimatedPromptTokens, "cancelled")
+                } else {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        persistAssistantMessage(
+                            conversationId = conversationId,
+                            model = model,
+                            content = partialContent,
+                            reasoningContent = partialReasoning.ifBlank { null },
+                            reasoningTokens = tokenEstimator.estimateTokens(partialReasoning, model.modelId),
+                            usage = serverUsage,
+                            estimatedPromptTokens = estimatedPromptTokens,
+                            startedAt = startedAt,
+                            finishReason = "cancelled",
+                        )
+                    }
                 }
                 _uiState.update { it.copy(isStreaming = false, streamingContent = "", streamingReasoning = "", streamingEstimatedTokens = 0) }
                 throw c
@@ -471,25 +556,62 @@ class ChatViewModel @Inject constructor(
                 )
             }
 
-            persistAssistantMessage(
-                conversationId = conversationId,
-                model = model,
-                content = contentBuilder.toString(),
-                reasoningContent = reasoningBuilder.toString().ifBlank { null },
-                reasoningTokens = tokenEstimator.estimateTokens(reasoningBuilder.toString(), model.modelId),
-                usage = serverUsage,
-                estimatedPromptTokens = estimatedPromptTokens,
-                startedAt = startedAt,
-                finishReason = finishReason,
-            )
+            if (temporary) {
+                appendTempAssistant(contentBuilder.toString(), reasoningBuilder.toString(), model.modelId, startedAt, serverUsage, estimatedPromptTokens, finishReason)
+            } else {
+                persistAssistantMessage(
+                    conversationId = conversationId,
+                    model = model,
+                    content = contentBuilder.toString(),
+                    reasoningContent = reasoningBuilder.toString().ifBlank { null },
+                    reasoningTokens = tokenEstimator.estimateTokens(reasoningBuilder.toString(), model.modelId),
+                    usage = serverUsage,
+                    estimatedPromptTokens = estimatedPromptTokens,
+                    startedAt = startedAt,
+                    finishReason = finishReason,
+                )
+            }
             _uiState.update { it.copy(isStreaming = false, streamingContent = "", streamingReasoning = "", streamingEstimatedTokens = 0) }
 
-            // 首轮结束后异步生成标题；DeepSeek 刷新余额
-            launch { runCatching { titleGenerator.onRoundCompleted(conversationId) } }
+            // 首轮结束后异步生成标题；DeepSeek 刷新余额（临时模式不生成标题）
+            if (!temporary) {
+                launch { runCatching { titleGenerator.onRoundCompleted(conversationId) } }
+            }
             if (provider.id == BalanceService.DEEPSEEK_ID) {
                 launch { runCatching { balanceService.refresh() } }
             }
         }
+    }
+
+    /** 临时对话：把助手回复写入内存消息。 */
+    private fun appendTempAssistant(
+        content: String,
+        reasoning: String,
+        modelId: String,
+        startedAt: Long,
+        usage: LlmStreamEvent.Usage?,
+        estimatedPromptTokens: Int,
+        finishReason: String?,
+    ) {
+        if (content.isBlank() && reasoning.isBlank()) return
+        val promptTokens = usage?.promptTokens ?: estimatedPromptTokens
+        val completionTokens = usage?.completionTokens ?: tokenEstimator.estimateTokens(content, modelId)
+        val entity = MessageEntity(
+            id = tempIdCounter.getAndDecrement(),
+            conversationId = -1L,
+            role = Role.ASSISTANT,
+            content = content,
+            reasoningContent = reasoning.ifBlank { null },
+            createdAt = System.currentTimeMillis(),
+            promptTokens = promptTokens,
+            completionTokens = completionTokens,
+            totalTokens = promptTokens + completionTokens,
+            usageSource = if (usage != null && usage.totalTokens > 0) UsageSource.SERVER else UsageSource.ESTIMATED,
+            model = modelId,
+            latencyMs = System.currentTimeMillis() - startedAt,
+            finishReason = finishReason,
+        )
+        _uiState.update { it.copy(tempMessages = it.tempMessages + entity) }
     }
 
     private suspend fun persistAssistantMessage(
@@ -662,6 +784,89 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch { conversationRepository.setPinned(id, pinned) }
     }
 
+    /** 复制会话（kelivo）：消息与附件一并复制，返回新会话 id。 */
+    fun duplicateConversation(id: Long) {
+        viewModelScope.launch {
+            val newId = conversationRepository.duplicate(id)
+            if (newId != null && newId > 0) {
+                _uiState.update { it.copy(error = "已复制会话（副本）") }
+            }
+        }
+    }
+
+    /** 批量删除会话（多选模式）。 */
+    fun deleteConversations(ids: Set<Long>) {
+        val currentId = _uiState.value.conversationId
+        if (ids.contains(currentId)) {
+            // 删除当前会话：先重置状态避免竞态
+            streamJob?.cancel()
+            messagesJob?.cancel()
+            _uiState.update {
+                it.copy(
+                    conversationId = 0L,
+                    title = "新对话",
+                    messages = emptyList(),
+                    isStreaming = false,
+                    streamingContent = "",
+                    streamingReasoning = "",
+                    streamingEstimatedTokens = 0,
+                    usedPromptTokens = 0,
+                    contextEstimated = true,
+                )
+            }
+        }
+        viewModelScope.launch {
+            conversationRepository.deleteManyCascade(ids.toList())
+            if (ids.contains(currentId)) newConversation()
+        }
+    }
+
+    /** 批量置顶 / 取消置顶（多选模式）。 */
+    fun setPinnedMany(ids: Set<Long>, pinned: Boolean) {
+        viewModelScope.launch { conversationRepository.setPinnedMany(ids.toList(), pinned) }
+    }
+
+    /** 临时对话（kelivo temporary chat）：进入后消息不落库；退出恢复原会话。 */
+    fun toggleTemporary() {
+        val state = _uiState.value
+        if (state.isTemporary) {
+            // 退出临时模式：恢复之前的会话或回到新会话
+            _uiState.update {
+                it.copy(
+                    isTemporary = false,
+                    tempMessages = emptyList(),
+                    isStreaming = false,
+                    streamingContent = "",
+                    streamingReasoning = "",
+                    streamingEstimatedTokens = 0,
+                    usedPromptTokens = 0,
+                    contextEstimated = true,
+                )
+            }
+            val restore = state.preTemporaryConversationId
+            if (restore != 0L) selectConversation(restore) else newConversation()
+        } else {
+            streamJob?.cancel()
+            messagesJob?.cancel()
+            _uiState.update {
+                it.copy(
+                    isTemporary = true,
+                    tempMessages = emptyList(),
+                    title = "临时对话",
+                    input = "",
+                    pendingAttachments = emptyList(),
+                    isStreaming = false,
+                    streamingContent = "",
+                    streamingReasoning = "",
+                    streamingEstimatedTokens = 0,
+                    usedPromptTokens = 0,
+                    contextEstimated = true,
+                    preTemporaryConversationId = it.conversationId,
+                )
+            }
+        }
+    }
+
     /** 切换模型：只覆盖当前会话。 */
     fun switchModel(providerId: String, modelId: String) {
         viewModelScope.launch {
@@ -684,16 +889,29 @@ class ChatViewModel @Inject constructor(
 
     fun regenerate() {
         val state = _uiState.value
-        if (state.isStreaming || state.conversationId == 0L) return
+        if (state.isStreaming) return
+        if (state.isTemporary) {
+            val lastUser = state.tempMessages.lastOrNull { it.role == Role.USER } ?: return
+            _uiState.update {
+                it.copy(tempMessages = it.tempMessages.dropLastWhile { m -> m.role != Role.USER })
+            }
+            launchStream(-1L, lastUser.id, temporary = true)
+            return
+        }
+        if (state.conversationId == 0L) return
         val lastAssistant = state.messages.lastOrNull { it.role == Role.ASSISTANT } ?: return
         val lastUser = state.messages.lastOrNull { it.role == Role.USER } ?: return
         viewModelScope.launch {
             messageRepository.delete(lastAssistant.id)
-            launchStream(state.conversationId, lastUser.id)
+            launchStream(state.conversationId, lastUser.id, temporary = false)
         }
     }
 
     fun deleteMessage(messageId: Long) {
+        if (_uiState.value.isTemporary) {
+            _uiState.update { it.copy(tempMessages = it.tempMessages.filterNot { m -> m.id == messageId }) }
+            return
+        }
         viewModelScope.launch { messageRepository.delete(messageId) }
     }
 
@@ -778,6 +996,12 @@ class ChatViewModel @Inject constructor(
 
     companion object {
         const val MAX_IMAGES = 9
+
+        /** 临时消息自增负 id。 */
+        private val tempIdCounter = java.util.concurrent.atomic.AtomicLong(-1)
+
+        /** 内置快捷短语（kelivo quick phrase）。 */
+        val BUILTIN_QUICK_PHRASES get() = com.ming.mchat.core.common.BuiltinQuickPhrases.ALL
 
         /** 流式 UI 刷新间隔（ms）：高频 delta 节流，保证滑动流畅。 */
         const val UI_REFRESH_INTERVAL_MS = 90L

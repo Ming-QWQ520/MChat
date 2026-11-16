@@ -7,6 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.ming.mchat.core.theme.GlassBackdropSource
 import com.ming.mchat.core.theme.MChatTheme
 import com.ming.mchat.navigation.MChatNavHost
 import dagger.hilt.android.AndroidEntryPoint
@@ -29,7 +30,9 @@ class MainActivity : ComponentActivity() {
                 ),
                 fontScale = appearance.fontScale,
             ) {
-                MChatNavHost()
+                GlassBackdropSource {
+                    MChatNavHost()
+                }
             }
         }
     }
