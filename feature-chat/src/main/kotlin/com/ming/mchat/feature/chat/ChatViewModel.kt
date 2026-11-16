@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.ming.mchat.core.attachment.AttachmentRepository
 import com.ming.mchat.core.attachment.PendingAttachment
 import com.ming.mchat.core.common.ChatBackground
+import com.ming.mchat.core.common.ReasoningEffortLevel
 import com.ming.mchat.core.common.StringExt
 import com.ming.mchat.core.data.datastore.SettingsRepository
 import com.ming.mchat.core.data.entity.AttachmentKind
@@ -31,7 +32,10 @@ import com.ming.mchat.feature.title.TitleGenerator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -40,7 +44,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 聊天页 UI 状态。 */
 data class ChatUiState(
@@ -53,9 +59,11 @@ data class ChatUiState(
     val streamingReasoning: String = "",
     val streamingEstimatedTokens: Int = 0,
     val providerId: String = "deepseek",
-    val modelId: String = "deepseek-chat",
+    val modelId: String = "deepseek-4.1-flash",
+    val modelDisplayName: String = "DeepSeek-4.1Flash",
     val modelSupportsVision: Boolean = false,
     val modelSupportsReasoning: Boolean = false,
+    val reasoningEffort: ReasoningEffortLevel = ReasoningEffortLevel.MAX,
     val contextWindow: Int = 131072,
     val usedPromptTokens: Int = 0,
     val contextEstimated: Boolean = true,
@@ -68,6 +76,7 @@ data class ChatUiState(
     val confirmInjection: Boolean = false,
     val error: String? = null,
     val chatBackground: ChatBackground = ChatBackground.SOLID,
+    val backgroundImageUri: String = "",
     val providers: List<ProviderConfigEntity> = emptyList(),
     val modelsByProvider: Map<String, List<ModelConfigEntity>> = emptyMap(),
 ) {
@@ -110,41 +119,69 @@ class ChatViewModel @Inject constructor(
                         var next = state.copy(
                             providers = providers,
                             modelsByProvider = modelsByProvider,
+                            reasoningEffort = behavior.reasoningEffort,
                         )
                         val currentModel = modelsByProvider[state.providerId]?.firstOrNull { it.modelId == state.modelId }
                         next = next.copy(
+                            modelDisplayName = currentModel?.displayName ?: state.modelId,
                             modelSupportsVision = currentModel?.supportsVision ?: false,
                             modelSupportsReasoning = currentModel?.supportsReasoning ?: false,
                             contextWindow = currentModel?.contextTokens ?: 32768,
                         )
+                        // 未进入会话时，当前 Provider / 模型失效（含旧模型下线）则自动回退到可用模型
                         if (state.conversationId == 0L) {
                             val providerValid = providers.any { it.id == state.providerId && it.enabled }
-                            if (!providerValid) {
-                                val fallbackModel = modelsByProvider[behavior.defaultProviderId]
-                                    ?.firstOrNull { it.modelId == behavior.defaultModelId }
-                                next = next.copy(
-                                    providerId = behavior.defaultProviderId,
-                                    modelId = behavior.defaultModelId,
-                                    modelSupportsVision = fallbackModel?.supportsVision ?: false,
-                                    modelSupportsReasoning = fallbackModel?.supportsReasoning ?: false,
-                                    contextWindow = fallbackModel?.contextTokens ?: 32768,
-                                )
+                            if (!providerValid || currentModel == null) {
+                                val picked = sequence {
+                                    if (providerValid) yieldAll(modelsByProvider[state.providerId].orEmpty())
+                                    yield(modelsByProvider[behavior.defaultProviderId]
+                                        ?.firstOrNull { it.modelId == behavior.defaultModelId })
+                                    yieldAll(modelsByProvider[behavior.defaultProviderId].orEmpty())
+                                    providers.filter { it.enabled }.forEach { p ->
+                                        yieldAll(modelsByProvider[p.id].orEmpty())
+                                    }
+                                }.filterNotNull().firstOrNull()
+                                if (picked != null) {
+                                    next = next.copy(
+                                        providerId = picked.providerId,
+                                        modelId = picked.modelId,
+                                        modelDisplayName = picked.displayName,
+                                        modelSupportsVision = picked.supportsVision,
+                                        modelSupportsReasoning = picked.supportsReasoning,
+                                        contextWindow = picked.contextTokens,
+                                    )
+                                }
                             }
                         }
                         next
                     }
                 }
         }
-        // 会话列表
+        // 会话列表：同步当前会话标题（自动标题生成 / 重命名后无需重新选中）
         viewModelScope.launch {
             conversationRepository.observeAll().collect { list ->
-                _uiState.update { it.copy(conversations = list) }
+                _uiState.update { state ->
+                    val current = list.firstOrNull { it.id == state.conversationId }
+                    state.copy(
+                        conversations = list,
+                        title = when {
+                            state.conversationId == 0L -> "新对话"
+                            current != null -> current.title
+                            else -> state.title
+                        },
+                    )
+                }
             }
         }
-        // 外观：聊天背景（纯色/主题渐变）
+        // 外观：聊天背景（纯色/主题渐变/自定义图片）
         viewModelScope.launch {
             settingsRepository.appearance.collect { appearance ->
-                _uiState.update { it.copy(chatBackground = appearance.chatBackground) }
+                _uiState.update {
+                    it.copy(
+                        chatBackground = appearance.chatBackground,
+                        backgroundImageUri = appearance.backgroundImageUri,
+                    )
+                }
             }
         }
         // 余额 + 低余额阈值
@@ -216,6 +253,8 @@ class ChatViewModel @Inject constructor(
                 modelId = snapshot.modelId.ifBlank { behavior.defaultModelId },
             )
             observeMessages(conversation.id)
+            // 关键：新会话 id 必须写回状态，否则下一轮发送会再次新建会话（历史断裂）
+            _uiState.update { it.copy(conversationId = conversation.id) }
             conversation.id
         } else {
             snapshot.conversationId
@@ -322,6 +361,7 @@ class ChatViewModel @Inject constructor(
                     isStreaming = true,
                     streamingContent = "",
                     streamingReasoning = "",
+                    streamingEstimatedTokens = 0,
                     error = null,
                     presetName = resolved.presetName,
                     usedPromptTokens = estimatedPromptTokens,
@@ -334,22 +374,33 @@ class ChatViewModel @Inject constructor(
             val reasoningBuilder = StringBuilder()
             var serverUsage: LlmStreamEvent.Usage? = null
             var finishReason: String? = null
+            // 增量估算：只对每个 delta 做廉价字符近似，避免逐 token 全量重算（O(n²)）
+            var streamingTokens = 0
+
+            // UI 节流：网络 delta 高频到达，仅每 ~90ms 把构造器内容刷到界面，
+            // 避免逐 token 重组 + 全量 Markdown 重解析导致的掉帧与滑动卡顿
+            val uiRefresher = launch {
+                while (isActive) {
+                    delay(UI_REFRESH_INTERVAL_MS)
+                    _uiState.update {
+                        it.copy(
+                            streamingContent = contentBuilder.toString(),
+                            streamingReasoning = reasoningBuilder.toString(),
+                            streamingEstimatedTokens = streamingTokens,
+                        )
+                    }
+                }
+            }
 
             try {
                 chatService.streamChat(params).collect { event ->
                     when (event) {
                         is LlmStreamEvent.Delta -> {
                             contentBuilder.append(event.content)
-                            _uiState.update {
-                                it.copy(
-                                    streamingContent = contentBuilder.toString(),
-                                    streamingEstimatedTokens = tokenEstimator.estimateTokens(contentBuilder.toString(), model.modelId),
-                                )
-                            }
+                            streamingTokens += tokenEstimator.approximateByChars(event.content)
                         }
                         is LlmStreamEvent.Reasoning -> {
                             reasoningBuilder.append(event.content)
-                            _uiState.update { it.copy(streamingReasoning = reasoningBuilder.toString()) }
                         }
                         is LlmStreamEvent.ToolCallDelta -> Unit
                         is LlmStreamEvent.Usage -> serverUsage = event
@@ -369,19 +420,36 @@ class ChatViewModel @Inject constructor(
                     }
                 }
             } catch (c: CancellationException) {
-                // 用户主动停止：保存已生成的部分内容
-                persistAssistantMessage(
-                    conversationId = conversationId,
-                    model = model,
-                    content = contentBuilder.toString(),
-                    reasoningTokens = tokenEstimator.estimateTokens(reasoningBuilder.toString(), model.modelId),
-                    usage = serverUsage,
-                    estimatedPromptTokens = estimatedPromptTokens,
-                    startedAt = startedAt,
-                    finishReason = "cancelled",
-                )
-                _uiState.update { it.copy(isStreaming = false, streamingContent = "", streamingReasoning = "") }
+                // 用户主动停止：保存已生成的部分内容（NonCancellable 保证落库完成）
+                uiRefresher.cancel()
+                _uiState.update {
+                    it.copy(
+                        streamingContent = contentBuilder.toString(),
+                        streamingReasoning = reasoningBuilder.toString(),
+                    )
+                }
+                withContext(NonCancellable + Dispatchers.IO) {
+                    persistAssistantMessage(
+                        conversationId = conversationId,
+                        model = model,
+                        content = contentBuilder.toString(),
+                        reasoningTokens = tokenEstimator.estimateTokens(reasoningBuilder.toString(), model.modelId),
+                        usage = serverUsage,
+                        estimatedPromptTokens = estimatedPromptTokens,
+                        startedAt = startedAt,
+                        finishReason = "cancelled",
+                    )
+                }
+                _uiState.update { it.copy(isStreaming = false, streamingContent = "", streamingReasoning = "", streamingEstimatedTokens = 0) }
                 throw c
+            }
+
+            uiRefresher.cancel()
+            _uiState.update {
+                it.copy(
+                    streamingContent = contentBuilder.toString(),
+                    streamingReasoning = reasoningBuilder.toString(),
+                )
             }
 
             persistAssistantMessage(
@@ -394,7 +462,7 @@ class ChatViewModel @Inject constructor(
                 startedAt = startedAt,
                 finishReason = finishReason,
             )
-            _uiState.update { it.copy(isStreaming = false, streamingContent = "", streamingReasoning = "") }
+            _uiState.update { it.copy(isStreaming = false, streamingContent = "", streamingReasoning = "", streamingEstimatedTokens = 0) }
 
             // 首轮结束后异步生成标题；DeepSeek 刷新余额
             launch { runCatching { titleGenerator.onRoundCompleted(conversationId) } }
@@ -444,7 +512,15 @@ class ChatViewModel @Inject constructor(
             )
         )
         usageRepository.recordUsage(model.modelId, promptTokens, completionTokens)
-        _uiState.update { it.copy(usedPromptTokens = promptTokens, contextEstimated = source == UsageSource.ESTIMATED) }
+        // 上下文环语义：反映“下一轮请求”的上下文占用。
+        // 服务端 usage 可用时：prompt + completion ≈ 下一轮 prompt；否则全历史本地估算。
+        if (source == UsageSource.SERVER) {
+            _uiState.update {
+                it.copy(usedPromptTokens = promptTokens + completionTokens, contextEstimated = false)
+            }
+        } else {
+            refreshContextUsage(conversationId)
+        }
     }
 
     /** 停止按钮：取消流式 Job（部分内容已保存）。 */
@@ -473,6 +549,9 @@ class ChatViewModel @Inject constructor(
         messagesJob?.cancel()
         viewModelScope.launch {
             val behavior = settingsRepository.modelBehavior.first()
+            val models = providerRepository.getModels(behavior.defaultProviderId)
+            val defaultModel = models.firstOrNull { it.modelId == behavior.defaultModelId }
+                ?: models.firstOrNull()
             _uiState.update {
                 it.copy(
                     conversationId = 0L,
@@ -485,8 +564,13 @@ class ChatViewModel @Inject constructor(
                     isStreaming = false,
                     streamingContent = "",
                     streamingReasoning = "",
+                    streamingEstimatedTokens = 0,
                     providerId = behavior.defaultProviderId,
                     modelId = behavior.defaultModelId,
+                    modelDisplayName = defaultModel?.displayName ?: behavior.defaultModelId,
+                    modelSupportsVision = defaultModel?.supportsVision ?: false,
+                    modelSupportsReasoning = defaultModel?.supportsReasoning ?: false,
+                    contextWindow = defaultModel?.contextTokens ?: 32768,
                 )
             }
         }
@@ -495,6 +579,7 @@ class ChatViewModel @Inject constructor(
     fun selectConversation(id: Long) {
         viewModelScope.launch {
             val conversation = conversationRepository.getById(id) ?: return@launch
+            val model = providerRepository.getModel(conversation.providerId, conversation.modelId)
             observeMessages(id)
             _uiState.update {
                 it.copy(
@@ -502,11 +587,15 @@ class ChatViewModel @Inject constructor(
                     title = conversation.title,
                     providerId = conversation.providerId,
                     modelId = conversation.modelId,
+                    modelDisplayName = model?.displayName ?: conversation.modelId,
+                    modelSupportsVision = model?.supportsVision ?: false,
+                    modelSupportsReasoning = model?.supportsReasoning ?: false,
+                    contextWindow = model?.contextTokens ?: 32768,
                     input = "",
                     pendingAttachments = emptyList(),
                 )
             }
-            updateContextUsage(id)
+            refreshContextUsage(id)
         }
     }
 
@@ -543,6 +632,16 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** 输入栏“深度思考”三档强度（低/高/最高）：即时生效并持久化。 */
+    fun setReasoningEffort(level: ReasoningEffortLevel) {
+        if (_uiState.value.reasoningEffort == level) return
+        _uiState.update { it.copy(reasoningEffort = level) }
+        viewModelScope.launch {
+            val behavior = settingsRepository.modelBehavior.first()
+            settingsRepository.setModelBehavior(behavior.copy(reasoningEffort = level))
+        }
+    }
+
     fun regenerate() {
         val state = _uiState.value
         if (state.isStreaming || state.conversationId == 0L) return
@@ -558,15 +657,32 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch { messageRepository.delete(messageId) }
     }
 
-    private fun updateContextUsage(conversationId: Long) {
+    /**
+     * 上下文环用量：反映“下一轮请求”的上下文占用。
+     * - 服务端 usage 可用（最后一条助手消息为 SERVER）：prompt + completion ≈ 下一轮 prompt；
+     * - 否则全历史本地估算（含附件与系统提示词基线）。
+     */
+    private fun refreshContextUsage(conversationId: Long) {
         viewModelScope.launch {
             val messages = messageRepository.getByConversation(conversationId)
-            val lastAssistant = messages.lastOrNull { it.role == Role.ASSISTANT && it.promptTokens != null }
-            val serverPromptTokens = lastAssistant?.promptTokens
-            if (serverPromptTokens != null) {
-                _uiState.update { it.copy(usedPromptTokens = serverPromptTokens, contextEstimated = false) }
+            val lastServer = messages.lastOrNull {
+                it.role == Role.ASSISTANT && it.usageSource == UsageSource.SERVER && it.promptTokens != null
+            }
+            if (lastServer != null) {
+                _uiState.update {
+                    it.copy(
+                        usedPromptTokens = (lastServer.promptTokens ?: 0) + (lastServer.completionTokens ?: 0),
+                        contextEstimated = false,
+                    )
+                }
             } else {
-                val estimated = messages.sumOf { tokenEstimator.estimateTokens(it.content) } + 200
+                val estimated = SYSTEM_PROMPT_BASELINE + messages.sumOf { m ->
+                    val attachmentTokens = attachmentRepository.attachmentsForMessage(m.id).sumOf { a ->
+                        if (a.kind == AttachmentKind.IMAGE) IMAGE_TOKEN_BASELINE
+                        else tokenEstimator.estimateTokens(a.extractedText.orEmpty())
+                    }
+                    tokenEstimator.estimateTokens(m.content) + attachmentTokens
+                }
                 _uiState.update { it.copy(usedPromptTokens = estimated, contextEstimated = true) }
             }
         }
@@ -622,5 +738,14 @@ class ChatViewModel @Inject constructor(
 
     companion object {
         const val MAX_IMAGES = 9
+
+        /** 流式 UI 刷新间隔（ms）：高频 delta 节流，保证滑动流畅。 */
+        const val UI_REFRESH_INTERVAL_MS = 90L
+
+        /** 本地估算时的系统提示词基线（模板 + 安全声明 + 聊天格式开销）。 */
+        private const val SYSTEM_PROMPT_BASELINE = 160
+
+        /** 图片消息本地估算基线（detail=auto 常见范围的中低值）。 */
+        private const val IMAGE_TOKEN_BASELINE = 300
     }
 }

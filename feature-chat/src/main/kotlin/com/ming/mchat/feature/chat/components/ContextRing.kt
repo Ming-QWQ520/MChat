@@ -31,8 +31,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * 上下文环（输入框上方左侧，直径约 38dp）：
- * - 环身 = 会话累计 prompt_tokens / contextWindow；<80% 主题色，80~95% 橙色，>95% 红色；
+ * 上下文环（输入框内，默认直径 30dp，可配置）：
+ * - 环身 = 下一轮请求上下文占用 / contextWindow；<80% 主题色，80~95% 橙色，>95% 红色；
  * - 环心：非 DeepSeek 显示占用百分比；DeepSeek 显示简短余额（>999 显示 1.2K）；
  * - 点击展开浮层：上下文拆分 + DeepSeek 余额明细。
  */
@@ -46,7 +46,9 @@ fun ContextRing(
     lowBalance: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    diameter: androidx.compose.ui.unit.Dp = 30.dp,
 ) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
     val ratio = if (contextWindow > 0) {
         (usedTokens.toFloat() / contextWindow).coerceIn(0f, 1f)
     } else {
@@ -60,16 +62,18 @@ fun ContextRing(
     }
     val trackColor = scheme.surfaceContainerHighest
     val warning = showBalance && lowBalance
+    val strokeWidth = with(density) { (diameter * 0.11f).toPx() }
+    val centerFontSize = with(density) { (diameter * 0.26f).toSp() }
 
     Box(
         modifier = modifier
-            .size(38.dp)
+            .size(diameter)
             .clip(CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            val stroke = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
+            val stroke = Stroke(width = strokeWidth, cap = StrokeCap.Round)
             drawArc(
                 color = trackColor,
                 startAngle = -90f,
@@ -106,8 +110,8 @@ fun ContextRing(
         }
         Text(
             text = centerText,
-            fontSize = 9.sp,
-            lineHeight = 10.sp,
+            fontSize = centerFontSize,
+            lineHeight = centerFontSize,
             textAlign = TextAlign.Center,
             maxLines = 1,
             color = if (warning) scheme.error else scheme.onSurface,

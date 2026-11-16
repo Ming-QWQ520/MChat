@@ -75,7 +75,7 @@ private const val PINNED_BUCKET = -1
 fun HistoryDrawerContent(
     modifier: Modifier = Modifier,
     currentProviderName: String,
-    currentModelId: String,
+    currentModelName: String,
     conversations: List<DrawerConversationItem>,
     onNewChat: () -> Unit,
     onSelectConversation: (Long) -> Unit,
@@ -102,7 +102,7 @@ fun HistoryDrawerContent(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(currentProviderName, style = MaterialTheme.typography.titleMedium)
-                        Text(currentModelId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(currentModelName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     IconButton(onClick = onOpenModelPicker) {
                         Icon(Icons.Filled.SwapHoriz, contentDescription = "切换模型")

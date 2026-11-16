@@ -6,12 +6,20 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
@@ -20,10 +28,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -32,6 +40,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,14 +48,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
@@ -56,8 +67,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.ming.mchat.core.common.ChatBackground
 import com.ming.mchat.core.common.MarkdownStripper
+import com.ming.mchat.core.data.entity.Role
 import com.ming.mchat.core.theme.LocalLiquidGlass
 import com.ming.mchat.core.theme.glassBackdrop
 import com.ming.mchat.core.theme.liquidGlass
@@ -67,13 +80,15 @@ import com.ming.mchat.feature.chat.components.MessageList
 import com.ming.mchat.feature.history.HistoryDrawerContent
 import com.ming.mchat.feature.history.ModelPickerSheet
 import com.ming.mchat.feature.history.RenameConversationDialog
+import java.io.File
 import kotlinx.coroutines.launch
 
 /**
- * 聊天页：历史抽屉 + 消息列表 + 底部输入区。
- * - 抽屉左边缘右滑打开（gesturesEnabled），TopAppBar 菜单按钮冗余入口；
- * - 打开抽屉前隐藏键盘；
- * - 液态玻璃开启时：TopAppBar / 底栏 / 抽屉走玻璃层，抽屉打开时对背后内容做真实背景模糊。
+ * 聊天页（DeepSeek 手机端风格）：历史抽屉 + 消息列表 + 悬浮输入区。
+ * - 空会话时展示居中欢迎页（logo + 问候语）；
+ * - 顶栏：菜单 / 会话标题（点击重命名）/ 新建对话；
+ * - 流式输出时仅在用户停留于底部才自动跟随滚动，上滑阅读历史不受打断；
+ * - 聊天背景支持纯色 / 主题渐变 / 自定义图片（设置中配置）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -115,15 +130,35 @@ fun ChatScreen(
     }
     LaunchedEffect(state.providerId) { viewModel.refreshBalance() }
 
-    // 自动滚动：新消息动画滚动；流式增量直接定位
-    LaunchedEffect(state.messages.size, state.isStreaming) {
-        val lastIndex = state.messages.size - 1 + if (state.isStreaming) 1 else 0
-        if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
+    // 用户是否停留在列表底部：上滑阅读历史时暂停自动跟随，回到底部自动恢复
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            layoutInfo.totalItemsCount == 0 || lastVisible >= layoutInfo.totalItemsCount - 2
+        }
     }
+
+    // 切换会话后直接定位到底部（无动画）
+    LaunchedEffect(state.conversationId) {
+        if (state.messages.isNotEmpty()) {
+            listState.scrollToItem(state.messages.size - 1)
+        }
+    }
+
+    // 用户发送新消息：始终滚动到底部
+    LaunchedEffect(state.messages.size) {
+        val msgs = state.messages
+        if (msgs.isNotEmpty() && msgs.last().role == Role.USER) {
+            listState.animateScrollToItem(msgs.size - 1)
+        }
+    }
+
+    // 流式输出：仅在用户位于底部时跟随（ViewModel 已按 ~90ms 节流刷新，此处的触发频率与之一致）
     LaunchedEffect(state.streamingContent.length) {
-        if (state.isStreaming) {
-            val target = state.messages.size
-            if (target >= 0) listState.scrollToItem(target)
+        if (state.isStreaming && isAtBottom) {
+            val total = listState.layoutInfo.totalItemsCount
+            if (total > 0) runCatching { listState.scrollToItem(total - 1) }
         }
     }
 
@@ -148,7 +183,7 @@ fun ChatScreen(
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(0.dp),
                 currentProviderName = state.providers.firstOrNull { it.id == state.providerId }?.displayName ?: state.providerId,
-                currentModelId = state.modelId,
+                currentModelName = state.modelDisplayName,
                 conversations = state.conversations.map {
                     com.ming.mchat.feature.history.DrawerConversationItem(
                         id = it.id,
@@ -179,20 +214,46 @@ fun ChatScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                .background(
-                    if (state.chatBackground == ChatBackground.GRADIENT) {
-                        Brush.verticalGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.surface,
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
-                                MaterialTheme.colorScheme.surface,
+                .background(MaterialTheme.colorScheme.surface)
+        ) {
+            // 聊天背景：自定义图片 / 主题渐变 / 纯色
+            val backgroundImage = File(state.backgroundImageUri)
+            if (state.chatBackground == ChatBackground.IMAGE && state.backgroundImageUri.isNotBlank() && backgroundImage.exists()) {
+                AsyncImage(
+                    model = backgroundImage,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // 遮罩：保证消息与输入区可读性
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.38f),
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                                )
                             )
                         )
-                    } else {
-                        Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface))
-                    }
                 )
-        ) {
+            } else if (state.chatBackground == ChatBackground.GRADIENT) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.surface,
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                                    MaterialTheme.colorScheme.surface,
+                                )
+                            )
+                        )
+                )
+            }
             Scaffold(
                 modifier = Modifier
                     .fillMaxSize()
@@ -203,7 +264,7 @@ fun ChatScreen(
                     TopAppBar(
                         modifier = if (glass.enabled) Modifier.liquidGlass(RectangleShape) else Modifier,
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = if (glass.enabled) Color.Transparent else MaterialTheme.colorScheme.surface,
+                            containerColor = Color.Transparent,
                         ),
                         navigationIcon = {
                             IconButton(onClick = { scope.launch { keyboard?.hide(); drawerState.open() } }) {
@@ -211,10 +272,10 @@ fun ChatScreen(
                             }
                         },
                         title = {
-                            androidx.compose.foundation.layout.Column(
+                            Column(
                                 Modifier
                                     .padding(start = 4.dp)
-                                    .clickable { showRename = true },
+                                    .clickable { if (state.conversationId != 0L) showRename = true },
                             ) {
                                 Text(
                                     state.title,
@@ -223,12 +284,17 @@ fun ChatScreen(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    state.modelId,
+                                    state.modelDisplayName,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { scope.launch { keyboard?.hide(); viewModel.newConversation() } }) {
+                                Icon(Icons.Filled.Add, contentDescription = "新建对话")
                             }
                         },
                     )
@@ -245,26 +311,36 @@ fun ChatScreen(
                         onPickDocuments = { documentPicker.launch(arrayOf("text/*", "application/pdf")) },
                         onRemoveAttachment = viewModel::removeAttachment,
                         onContextRingClick = { showRingDetail = true },
+                        onModelChipClick = { showModelPicker = true },
+                        onReasoningEffortChange = viewModel::setReasoningEffort,
                         glassEnabled = glass.enabled,
                     )
                 },
             ) { padding ->
                 Box(Modifier.fillMaxSize().padding(padding)) {
-                    MessageList(
-                        state = state,
-                        listState = listState,
-                        onCopy = { clipboard.setText(AnnotatedString(it)) },
-                        onDelete = viewModel::deleteMessage,
-                        onRegenerate = viewModel::regenerate,
-                        onCopyPlain = { clipboard.setText(AnnotatedString(MarkdownStripper.toPlainText(it))) },
-                        onShare = { text ->
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, text)
-                            }
-                            context.startActivity(Intent.createChooser(intent, "分享消息"))
-                        },
-                    )
+                    if (state.messages.isEmpty() && !state.isStreaming) {
+                        EmptyChatWelcome(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 40.dp),
+                        )
+                    } else {
+                        MessageList(
+                            state = state,
+                            listState = listState,
+                            onCopy = { clipboard.setText(AnnotatedString(it)) },
+                            onDelete = viewModel::deleteMessage,
+                            onRegenerate = viewModel::regenerate,
+                            onCopyPlain = { clipboard.setText(AnnotatedString(MarkdownStripper.toPlainText(it))) },
+                            onShare = { text ->
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, text)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "分享消息"))
+                            },
+                        )
+                    }
                     if (showRingDetail) {
                         Popup(
                             alignment = Alignment.BottomStart,
@@ -313,7 +389,7 @@ fun ChatScreen(
             onDismissRequest = viewModel::dismissInjectionWarning,
             title = { Text("检测到疑似提示词注入") },
             text = {
-                androidx.compose.foundation.layout.Column {
+                Column {
                     state.injectionWarnings.forEach { warning ->
                         Text("• $warning", style = MaterialTheme.typography.bodySmall)
                     }
@@ -333,3 +409,43 @@ fun ChatScreen(
     }
 }
 
+/**
+ * 空会话欢迎页（DeepSeek 风格）：居中 logo + 问候语 + 副标题。
+ */
+@Composable
+private fun EmptyChatWelcome(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(84.dp),
+            shadowElevation = if (isSystemInDarkTheme()) 0.dp else 2.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    "M",
+                    style = MaterialTheme.typography.displayMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+        Text(
+            "你好，我能帮什么忙吗？",
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "MChat · 多模型 AI 助手",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}

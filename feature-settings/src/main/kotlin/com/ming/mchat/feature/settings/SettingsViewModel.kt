@@ -1,10 +1,13 @@
 package com.ming.mchat.feature.settings
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ming.mchat.core.attachment.AttachmentRepository
+import com.ming.mchat.core.common.ChatBackground
 import com.ming.mchat.core.data.datastore.AppearanceSettings
 import com.ming.mchat.core.data.datastore.AttachmentSettings
 import com.ming.mchat.core.data.datastore.ModelBehaviorSettings
@@ -28,6 +31,7 @@ import com.ming.mchat.feature.title.TitleGenerator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -37,8 +41,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.io.File
+import java.io.FileOutputStream
 
 @Serializable
 data class ExportMessage(
@@ -169,6 +176,60 @@ class SettingsViewModel @Inject constructor(
     fun setPromptSafety(value: PromptSafetySettings) = viewModelScope.launch { settingsRepository.setPromptSafety(value) }
     fun setTitle(value: TitleSettings) = viewModelScope.launch { settingsRepository.setTitle(value) }
     fun setAttachment(value: AttachmentSettings) = viewModelScope.launch { settingsRepository.setAttachment(value) }
+
+    /** 设置自定义聊天背景：解码 → 长边压到 2048 → 存私有目录 JPEG，路径写入 DataStore。 */
+    fun setBackgroundImage(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resolver = context.contentResolver
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                val longEdge = maxOf(bounds.outWidth, bounds.outHeight)
+                while (longEdge / (sample * 2) >= 2048) sample *= 2
+                val options = BitmapFactory.Options().apply { inSampleSize = sample }
+                val decoded = resolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, options)
+                } ?: throw IllegalStateException("无法解码图片")
+                val bitmap = if (maxOf(decoded.width, decoded.height) > 2048) {
+                    val scale = 2048f / maxOf(decoded.width, decoded.height)
+                    Bitmap.createScaledBitmap(
+                        decoded,
+                        (decoded.width * scale).toInt().coerceAtLeast(1),
+                        (decoded.height * scale).toInt().coerceAtLeast(1),
+                        true,
+                    )
+                } else {
+                    decoded
+                }
+                val dir = File(context.filesDir, "backgrounds").apply { mkdirs() }
+                val file = File(dir, "chat_background.jpg")
+                FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+                if (bitmap !== decoded) bitmap.recycle()
+                if (decoded !== bitmap) decoded.recycle()
+                settingsRepository.setAppearance(
+                    appearance.value.copy(backgroundImageUri = file.absolutePath, chatBackground = ChatBackground.IMAGE)
+                )
+                notify("聊天背景已更新")
+            } catch (t: Throwable) {
+                notify("背景设置失败：${t.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    /** 清除自定义聊天背景，恢复纯色。 */
+    fun clearBackgroundImage() {
+        viewModelScope.launch {
+            val old = appearance.value.backgroundImageUri
+            settingsRepository.setAppearance(
+                appearance.value.copy(backgroundImageUri = "", chatBackground = ChatBackground.SOLID)
+            )
+            if (old.isNotBlank()) {
+                withContext(Dispatchers.IO) { runCatching { File(old).delete() } }
+            }
+            notify("已恢复默认背景")
+        }
+    }
 
     // ---------------- Provider ----------------
 

@@ -62,8 +62,6 @@ fun MarkdownText(
                         fontWeight = FontWeight.Bold,
                         lineHeight = style.lineHeight * (1.4f - 0.1f * block.level),
                     ),
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 is MdBlock.Bullet -> Row {
                     Text("•  ", color = textColor, style = style)

@@ -1,5 +1,6 @@
 package com.ming.mchat.core.data.seed
 
+import com.ming.mchat.core.data.dao.ConversationDao
 import com.ming.mchat.core.data.dao.ModelDao
 import com.ming.mchat.core.data.dao.PresetDao
 import com.ming.mchat.core.data.dao.ProviderDao
@@ -15,12 +16,14 @@ import kotlinx.coroutines.launch
 
 /**
  * 首次启动种子数据：四个内置 Provider（只插不覆盖用户 Key）+ 内置提示词预设。
+ * 已有安装升级时同步内置模型目录（插入新模型 / 下线旧模型 / remap 会话引用），不动用户 Key。
  */
 @Singleton
 class DatabaseSeeder @Inject constructor(
     private val providerDao: ProviderDao,
     private val modelDao: ModelDao,
     private val presetDao: PresetDao,
+    private val conversationDao: ConversationDao,
 ) {
 
     fun seedAsync() {
@@ -33,9 +36,31 @@ class DatabaseSeeder @Inject constructor(
         if (providerDao.count() == 0) {
             providerDao.insertAll(builtinProviders)
             modelDao.insertAll(builtinModels)
+        } else {
+            upgradeBuiltinModels()
         }
         if (presetDao.count() == 0) {
             presetDao.insertAll(builtinPresets)
+        }
+    }
+
+    /**
+     * 内置模型目录升级（幂等）：
+     * - DeepSeek 模型线更新为 DeepSeek-4.1Flash / DeepSeek-4.1Pro；
+     * - 旧 deepseek-chat / deepseek-reasoner 下线（禁用），历史会话 remap 到对应新模型；
+     * - 其余 Provider 保持不动（只插不覆盖）。
+     */
+    private suspend fun upgradeBuiltinModels() {
+        // 1. 补插缺失的新模型（IGNORE 策略，已有则跳过）
+        modelDao.insertAll(deepseekCurrentModels)
+
+        // 2. 旧模型存在则禁用，并把引用它的会话 remap 到新模型
+        deepseekLegacyRemap.forEach { (legacyId, newId) ->
+            val legacyKey = "deepseek:$legacyId"
+            if (modelDao.getById(legacyKey) != null) {
+                modelDao.setEnabled(legacyKey, false)
+                conversationDao.remapModel("deepseek", legacyId, newId)
+            }
         }
     }
 
@@ -87,11 +112,14 @@ class DatabaseSeeder @Inject constructor(
         )
 
         val builtinModels = listOf(
-            // DeepSeek
-            model("deepseek", "deepseek-chat", "deepseek-chat", contextTokens = 131072, maxOutputTokens = 8192),
+            // DeepSeek（当前在售：DeepSeek-4.1Flash / DeepSeek-4.1Pro）
             model(
-                "deepseek", "deepseek-reasoner", "deepseek-reasoner",
-                contextTokens = 131072, maxOutputTokens = 8192,
+                "deepseek", "deepseek-4.1-flash", "DeepSeek-4.1Flash",
+                contextTokens = 131072, maxOutputTokens = 16384,
+            ),
+            model(
+                "deepseek", "deepseek-4.1-pro", "DeepSeek-4.1Pro",
+                contextTokens = 131072, maxOutputTokens = 16384,
                 supportsReasoning = true, supportsTemperature = false,
             ),
             // ChatGPT
@@ -110,6 +138,25 @@ class DatabaseSeeder @Inject constructor(
             model("grok", "grok-2-latest", "grok-2-latest", contextTokens = 32768, maxOutputTokens = 8192),
             model("grok", "grok-2-vision-latest", "grok-2-vision-latest", contextTokens = 32768, maxOutputTokens = 8192, supportsVision = true),
             model("grok", "grok-beta", "grok-beta", contextTokens = 131072, maxOutputTokens = 8192, supportsStreamUsage = false),
+        )
+
+        /** DeepSeek 当前在售模型（升级时幂等补插）。 */
+        private val deepseekCurrentModels = listOf(
+            model(
+                "deepseek", "deepseek-4.1-flash", "DeepSeek-4.1Flash",
+                contextTokens = 131072, maxOutputTokens = 16384,
+            ),
+            model(
+                "deepseek", "deepseek-4.1-pro", "DeepSeek-4.1Pro",
+                contextTokens = 131072, maxOutputTokens = 16384,
+                supportsReasoning = true, supportsTemperature = false,
+            ),
+        )
+
+        /** 已下线的 DeepSeek 旧模型 → 替代模型。 */
+        private val deepseekLegacyRemap = mapOf(
+            "deepseek-chat" to "deepseek-4.1-flash",
+            "deepseek-reasoner" to "deepseek-4.1-pro",
         )
 
         val builtinPresets = listOf(

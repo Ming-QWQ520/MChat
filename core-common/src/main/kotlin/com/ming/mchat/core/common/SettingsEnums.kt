@@ -7,5 +7,5 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK, DYNAMIC }
 enum class GlassIntensity { LOW, MEDIUM, HIGH }
 enum class ReasoningEffortLevel { LOW, HIGH, MAX }
 enum class OutputTokenMode { DEFAULT, MANUAL, AUTO }
-enum class ChatBackground { SOLID, GRADIENT }
+enum class ChatBackground { SOLID, GRADIENT, IMAGE }
 enum class TitleLanguage { AUTO, CHINESE, ENGLISH }

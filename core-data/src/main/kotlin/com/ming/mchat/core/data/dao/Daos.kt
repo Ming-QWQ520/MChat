@@ -41,6 +41,10 @@ interface ConversationDao {
     @Query("UPDATE conversations SET providerId = :providerId, modelId = :modelId, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateModel(id: Long, providerId: String, modelId: String, updatedAt: Long)
 
+    /** 模型下线迁移：将引用旧模型 id 的会话批量 remap 到新模型（不改 updatedAt 排序）。 */
+    @Query("UPDATE conversations SET modelId = :newModelId WHERE providerId = :providerId AND modelId = :oldModelId")
+    suspend fun remapModel(providerId: String, oldModelId: String, newModelId: String)
+
     /** 自动兜底标题：MANUAL / AUTO_LLM 状态下不允许覆盖。 */
     @Query(
         "UPDATE conversations SET title = :title, titleSource = 'AUTO_TRUNCATE', updatedAt = :updatedAt " +

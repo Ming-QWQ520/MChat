@@ -38,12 +38,14 @@ data class AppearanceSettings(
     val reduceMotion: Boolean = false,
     val fontScale: Float = 1.0f,
     val chatBackground: ChatBackground = ChatBackground.SOLID,
+    /** 自定义聊天背景图：应用私有目录绝对路径；空表示未设置。 */
+    val backgroundImageUri: String = "",
 )
 
 /** 模型行为设置。 */
 data class ModelBehaviorSettings(
     val defaultProviderId: String = "deepseek",
-    val defaultModelId: String = "deepseek-chat",
+    val defaultModelId: String = "deepseek-4.1-flash",
     val globalTemperature: Double = 0.7,
     val reasoningEffort: ReasoningEffortLevel = ReasoningEffortLevel.MAX,
     val outputTokenMode: OutputTokenMode = OutputTokenMode.DEFAULT,
@@ -93,13 +95,14 @@ class SettingsRepository @Inject constructor(
             reduceMotion = p[Keys.reduceMotion] ?: false,
             fontScale = (p[Keys.fontScale] ?: 1.0f).coerceIn(0.85f, 1.3f),
             chatBackground = enumOf(p[Keys.chatBackground], ChatBackground.SOLID),
+            backgroundImageUri = p[Keys.backgroundImageUri] ?: "",
         )
     }
 
     val modelBehavior: Flow<ModelBehaviorSettings> = dataStore.data.map { p ->
         ModelBehaviorSettings(
             defaultProviderId = p[Keys.defaultProviderId] ?: "deepseek",
-            defaultModelId = p[Keys.defaultModelId] ?: "deepseek-chat",
+            defaultModelId = p[Keys.defaultModelId] ?: "deepseek-4.1-flash",
             globalTemperature = p[Keys.globalTemperature] ?: 0.7,
             reasoningEffort = enumOf(p[Keys.reasoningEffort], ReasoningEffortLevel.MAX),
             outputTokenMode = enumOf(p[Keys.outputTokenMode], OutputTokenMode.DEFAULT),
@@ -145,6 +148,7 @@ class SettingsRepository @Inject constructor(
             p[Keys.reduceMotion] = value.reduceMotion
             p[Keys.fontScale] = value.fontScale
             p[Keys.chatBackground] = value.chatBackground.name
+            p[Keys.backgroundImageUri] = value.backgroundImageUri
         }
     }
 
@@ -196,6 +200,7 @@ class SettingsRepository @Inject constructor(
         val reduceMotion = booleanPreferencesKey("reduceMotion")
         val fontScale = floatPreferencesKey("fontScale")
         val chatBackground = stringPreferencesKey("chatBackground")
+        val backgroundImageUri = stringPreferencesKey("backgroundImageUri")
 
         val defaultProviderId = stringPreferencesKey("defaultProviderId")
         val defaultModelId = stringPreferencesKey("defaultModelId")

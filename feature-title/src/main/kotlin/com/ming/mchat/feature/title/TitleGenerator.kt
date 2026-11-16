@@ -137,8 +137,8 @@ class TitleGenerator @Inject constructor(
         val nonReasoning = allModels.filter { !it.supportsReasoning }
         val pool = nonReasoning.ifEmpty { allModels }
         val cheapOrder = listOf(
-            "glm-4-flash", "gpt-4o-mini", "deepseek-chat", "grok-beta",
-            "glm-4-plus", "gpt-4o", "grok-2-latest",
+            "glm-4-flash", "deepseek-4.1-flash", "gpt-4o-mini", "grok-beta",
+            "glm-4-plus", "gpt-4o", "deepseek-4.1-pro", "grok-2-latest",
         )
         val chosen = pool.minByOrNull { m ->
             val index = cheapOrder.indexOf(m.modelId)
