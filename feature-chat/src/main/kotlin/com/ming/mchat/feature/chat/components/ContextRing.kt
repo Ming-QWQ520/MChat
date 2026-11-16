@@ -1,5 +1,7 @@
 package com.ming.mchat.feature.chat.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +15,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,7 +35,8 @@ import java.time.format.DateTimeFormatter
 
 /**
  * 上下文环（输入框内，默认直径 30dp，可配置）：
- * - 环身 = 下一轮请求上下文占用 / contextWindow；<80% 主题色，80~95% 橙色，>95% 红色；
+ * - 环身 = 下一轮请求上下文占用 / contextWindow，随上下文增加而填充（圆形进度条）；
+ * - 填充比例带平滑动画（400ms）；<80% 主题色，80~95% 橙色，>95% 红色；
  * - 环心：非 DeepSeek 显示占用百分比；DeepSeek 显示简短余额（>999 显示 1.2K）；
  * - 点击展开浮层：上下文拆分 + DeepSeek 余额明细。
  */
@@ -49,11 +53,17 @@ fun ContextRing(
     diameter: androidx.compose.ui.unit.Dp = 30.dp,
 ) {
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val ratio = if (contextWindow > 0) {
+    val rawRatio = if (contextWindow > 0) {
         (usedTokens.toFloat() / contextWindow).coerceIn(0f, 1f)
     } else {
         0f
     }
+    // 平滑动画：上下文增长时环形进度渐进填充
+    val ratio by animateFloatAsState(
+        targetValue = rawRatio,
+        animationSpec = tween(durationMillis = 400),
+        label = "contextRingProgress",
+    )
     val scheme = MaterialTheme.colorScheme
     val ringColor = when {
         ratio > 0.95f -> scheme.error
@@ -106,7 +116,7 @@ fun ContextRing(
                 else -> StringExt.shortenAmount(balance.totalBalance)
             }
         } else {
-            (if (estimated) "≈" else "") + "${(ratio * 100).toInt()}%"
+            (if (estimated) "≈" else "") + "${(rawRatio * 100).toInt()}%"
         }
         Text(
             text = centerText,

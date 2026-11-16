@@ -271,16 +271,27 @@ fun SettingsScreen(
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primaryContainer,
+                            color = if (provider.id == "deepseek") MaterialTheme.colorScheme.surfaceContainerHighest
+                            else MaterialTheme.colorScheme.primaryContainer,
                             modifier = Modifier.size(38.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    provider.displayName.take(1),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                )
+                                if (provider.id == "deepseek") {
+                                    androidx.compose.foundation.Image(
+                                        painter = androidx.compose.ui.res.painterResource(
+                                            com.ming.mchat.core.theme.R.drawable.deepseek_logo,
+                                        ),
+                                        contentDescription = "DeepSeek logo",
+                                        modifier = Modifier.size(30.dp),
+                                    )
+                                } else {
+                                    Text(
+                                        provider.displayName.take(1),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    )
+                                }
                             }
                         }
                         Spacer(Modifier.width(12.dp))
@@ -311,6 +322,14 @@ fun SettingsScreen(
                         Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+                TextButton(
+                    onClick = { onOpenProvider("new") },
+                    modifier = Modifier.padding(start = 4.dp),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("添加供应商（Base URL / API Key / 模型）")
+                }
                 HorizontalDivider(Modifier.padding(vertical = 10.dp))
                 ListItem(
                     headlineContent = { Text("默认模型") },
@@ -331,11 +350,15 @@ fun SettingsScreen(
                 }
                 LabeledSegmentedRow(
                     label = "思考强度（聊天页输入栏也可调）",
-                    options = listOf("低", "高", "最高"),
+                    options = listOf("关闭", "低", "高", "最高"),
                     selectedIndex = modelBehavior.reasoningEffort.ordinal,
                 ) { index ->
                     viewModel.setModelBehavior(modelBehavior.copy(reasoningEffort = ReasoningEffortLevel.entries[index]))
                 }
+                SwitchRow("思考过程默认折叠", modelBehavior.collapseReasoning) {
+                    viewModel.setModelBehavior(modelBehavior.copy(collapseReasoning = it))
+                }
+                SettingCaption("折叠时显示思考内容摘要，点击可展开；关闭后始终展开")
                 LabeledSegmentedRow(
                     label = "输出 Token 上限",
                     options = listOf("默认", "手动", "自动"),
@@ -751,11 +774,12 @@ private fun DeepSeekBalanceCard(
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Filled.Bolt,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.primary,
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(
+                        com.ming.mchat.core.theme.R.drawable.deepseek_logo,
+                    ),
+                    contentDescription = "DeepSeek logo",
+                    modifier = Modifier.size(18.dp),
                 )
                 Spacer(Modifier.width(6.dp))
                 Text("DeepSeek 余额", style = MaterialTheme.typography.titleSmall)
@@ -884,7 +908,7 @@ private fun PresetEditorDialog(
         TemplateEngine().render(
             systemPrompt,
             variables.associate { it.key to it.defaultValue },
-            TemplateEngine.builtinContext("deepseek-4.1-flash"),
+            TemplateEngine.builtinContext("deepseek-flash"),
         )
     }
     AlertDialog(

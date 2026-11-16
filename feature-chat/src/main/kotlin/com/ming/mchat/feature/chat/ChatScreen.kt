@@ -1,7 +1,6 @@
 package com.ming.mchat.feature.chat
 
 import androidx.activity.compose.rememberLauncherForActivityResult
-import android.content.Intent
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -53,10 +52,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,7 +66,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ming.mchat.core.common.ChatBackground
-import com.ming.mchat.core.common.MarkdownStripper
 import com.ming.mchat.core.data.entity.Role
 import com.ming.mchat.core.theme.LocalLiquidGlass
 import com.ming.mchat.core.theme.glassBackdrop
@@ -101,7 +97,6 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val clipboard = LocalClipboardManager.current
-    val context = LocalContext.current
     val glass = LocalLiquidGlass.current
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
@@ -177,11 +172,13 @@ fun ChatScreen(
         drawerState = drawerState,
         gesturesEnabled = true,
         drawerContent = {
+            // 历史抽屉：始终使用不透明背景，聊天背景图不会透入抽屉
             HistoryDrawerContent(
                 modifier = Modifier
                     .fillMaxWidth(0.84f)
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(0.dp),
+                currentProviderId = state.providerId,
                 currentProviderName = state.providers.firstOrNull { it.id == state.providerId }?.displayName ?: state.providerId,
                 currentModelName = state.modelDisplayName,
                 conversations = state.conversations.map {
@@ -313,6 +310,7 @@ fun ChatScreen(
                         onContextRingClick = { showRingDetail = true },
                         onModelChipClick = { showModelPicker = true },
                         onReasoningEffortChange = viewModel::setReasoningEffort,
+                        onDismissLowBalance = viewModel::dismissLowBalance,
                         glassEnabled = glass.enabled,
                     )
                 },
@@ -331,14 +329,6 @@ fun ChatScreen(
                             onCopy = { clipboard.setText(AnnotatedString(it)) },
                             onDelete = viewModel::deleteMessage,
                             onRegenerate = viewModel::regenerate,
-                            onCopyPlain = { clipboard.setText(AnnotatedString(MarkdownStripper.toPlainText(it))) },
-                            onShare = { text ->
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, text)
-                                }
-                                context.startActivity(Intent.createChooser(intent, "分享消息"))
-                            },
                         )
                     }
                     if (showRingDetail) {
@@ -422,15 +412,16 @@ private fun EmptyChatWelcome(modifier: Modifier = Modifier) {
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             modifier = Modifier.size(84.dp),
             shadowElevation = if (isSystemInDarkTheme()) 0.dp else 2.dp,
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Text(
-                    "M",
-                    style = MaterialTheme.typography.displayMedium,
-                    fontWeight = FontWeight.Bold,
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(
+                        com.ming.mchat.core.theme.R.drawable.deepseek_logo,
+                    ),
+                    contentDescription = "DeepSeek",
+                    modifier = Modifier.size(64.dp),
                 )
             }
         }
@@ -442,7 +433,7 @@ private fun EmptyChatWelcome(modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "MChat · 多模型 AI 助手",
+            "MChat · DeepSeek 驱动的 AI 助手",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

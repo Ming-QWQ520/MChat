@@ -1,5 +1,8 @@
 package com.ming.mchat.feature.history
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Add
@@ -25,7 +29,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,10 +51,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ming.mchat.core.common.TimeUtils
-import com.ming.mchat.core.theme.LiquidGlassSurface
 
 /** 抽屉会话条目。 */
 data class DrawerConversationItem(
@@ -66,14 +69,17 @@ data class DrawerConversationItem(
 private const val PINNED_BUCKET = -1
 
 /**
- * 历史抽屉：三段固定布局。
- * 顶部：当前模型卡片 + 新建对话 + 会话搜索框；中部：置顶分组 + 按时间分组的历史会话（sticky header）；
- * 底部：设置入口。液态玻璃开启时抽屉与顶部卡片用 LiquidGlassSurface，列表项保持普通 Surface。
+ * 历史抽屉（DeepSeek 手机端风格重构）：
+ * - 顶部：DeepSeek logo + 当前模型卡片 + 新建对话；
+ * - 中部：搜索框 + 置顶/时间分组历史会话（当前会话品牌蓝高亮）；
+ * - 右滑删除需二次确认（弹窗）；
+ * - 整体不透明背景，聊天背景图不会透入。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryDrawerContent(
     modifier: Modifier = Modifier,
+    currentProviderId: String,
     currentProviderName: String,
     currentModelName: String,
     conversations: List<DrawerConversationItem>,
@@ -86,29 +92,49 @@ fun HistoryDrawerContent(
     onOpenSettings: () -> Unit,
 ) {
     var renameTarget by remember { mutableStateOf<DrawerConversationItem?>(null) }
+    var deleteTarget by remember { mutableStateOf<DrawerConversationItem?>(null) }
     var searchQuery by remember { mutableStateOf("") }
+    val isDeepSeek = currentProviderId == "deepseek"
 
     Column(modifier = modifier) {
-        // ---- 顶部：模型卡片 + 新建对话 ----
-        LiquidGlassSurface(
+        // ---- 顶部：DeepSeek logo + 当前模型 + 新建对话 ----
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp, 16.dp, 16.dp, 8.dp),
             shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("当前模型", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(currentProviderName, style = MaterialTheme.typography.titleMedium)
-                        Text(currentModelName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
+                    androidx.compose.foundation.Image(
+                        painter = androidx.compose.ui.res.painterResource(
+                            com.ming.mchat.core.theme.R.drawable.deepseek_logo,
+                        ),
+                        contentDescription = "DeepSeek",
+                        modifier = Modifier.size(26.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (isDeepSeek) "DeepSeek" else currentProviderName,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.weight(1f))
                     IconButton(onClick = onOpenModelPicker) {
                         Icon(Icons.Filled.SwapHoriz, contentDescription = "切换模型")
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    currentModelName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(10.dp))
                 Surface(
                     onClick = onNewChat,
                     shape = MaterialTheme.shapes.large,
@@ -133,6 +159,7 @@ fun HistoryDrawerContent(
             value = searchQuery,
             onValueChange = { searchQuery = it },
             singleLine = true,
+            shape = RoundedCornerShape(14.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp),
@@ -161,7 +188,7 @@ fun HistoryDrawerContent(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 10.dp),
         ) {
             grouped.forEach { (bucket, items) ->
                 stickyHeader(key = "header_$bucket") {
@@ -195,7 +222,7 @@ fun HistoryDrawerContent(
                         item = item,
                         onClick = { onSelectConversation(item.id) },
                         onRename = { renameTarget = item },
-                        onDelete = { onDeleteConversation(item.id) },
+                        onDelete = { deleteTarget = item }, // 二次确认后再真正删除
                         onPin = { onPinConversation(item.id, !item.isPinned) },
                     )
                 }
@@ -203,7 +230,7 @@ fun HistoryDrawerContent(
             item {
                 if (filtered.isEmpty()) {
                     Text(
-                        if (query.isEmpty()) "暂无历史会话\n左上角“新建对话”开始" else "没有匹配“$query”的会话",
+                        if (query.isEmpty()) "暂无历史会话\n点击“新建对话”开始" else "没有匹配“$query”的会话",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(20.dp),
@@ -233,8 +260,30 @@ fun HistoryDrawerContent(
             },
         )
     }
+
+    // 右滑删除 / 菜单删除的二次确认
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除会话？") },
+            text = { Text("将删除「${target.title}」及其全部消息与附件，且无法恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteConversation(target.id)
+                    deleteTarget = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text("取消") }
+            },
+        )
+    }
 }
 
+/**
+ * 会话行：右滑删除（二次确认）、长按菜单（置顶/重命名/删除）。
+ * 当前会话使用品牌蓝高亮。
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationRow(
@@ -248,7 +297,7 @@ private fun ConversationRow(
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             if (value == SwipeToDismissBoxValue.EndToStart) {
-                onDelete()
+                onDelete() // 弹出二次确认，未确认前不真正删除
                 true
             } else {
                 false
@@ -259,24 +308,49 @@ private fun ConversationRow(
         state = dismissState,
         enableDismissFromStartToEnd = false,
         backgroundContent = {
+            val offsetFraction = when (dismissState.dismissDirection) {
+                SwipeToDismissBoxValue.EndToStart -> 1f
+                else -> 0f
+            }
+            val horizontal by animateDpAsState(
+                targetValue = (16 * (1 - offsetFraction)).dp,
+                label = "deleteBgPadding",
+            )
             Box(
                 Modifier
                     .fillMaxWidth()
                     .fillMaxHeight()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.errorContainer),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = "删除会话",
-                    tint = MaterialTheme.colorScheme.error,
-                )
+                Row(
+                    Modifier.padding(end = horizontal),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = "删除会话",
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "删除",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
             }
         },
     ) {
         Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = if (item.isCurrent) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(12.dp),
+            color = if (item.isCurrent) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 2.dp)
@@ -285,11 +359,30 @@ private fun ConversationRow(
             Box {
                 ListItem(
                     headlineContent = {
-                        Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            item.title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (item.isCurrent) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        )
                     },
-                    supportingContent = { Text(TimeUtils.formatDateTime(item.updatedAt), style = MaterialTheme.typography.labelSmall) },
+                    supportingContent = {
+                        Text(
+                            TimeUtils.formatDateTime(item.updatedAt),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    },
                     leadingContent = {
-                        Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Chat,
+                            contentDescription = null,
+                            tint = if (item.isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     },
                     trailingContent = {
                         if (item.isPinned) {
@@ -314,8 +407,14 @@ private fun ConversationRow(
                         onClick = { menuExpanded = false; onRename() },
                     )
                     DropdownMenuItem(
-                        text = { Text("删除") },
-                        leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                        text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        },
                         onClick = { menuExpanded = false; onDelete() },
                     )
                 }

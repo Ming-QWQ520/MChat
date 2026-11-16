@@ -49,6 +49,8 @@ data class MessageEntity(
     val conversationId: Long,
     val role: Role,
     val content: String,
+    /** 思考模式思维链（reasoning_content），历史消息重新打开时可折叠展示。 */
+    val reasoningContent: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val promptTokens: Int? = null,
     val completionTokens: Int? = null,
@@ -117,6 +119,8 @@ data class ModelConfigEntity(
     val useMaxCompletionTokens: Boolean = false,
     val systemRole: String = "system",
     val enabled: Boolean = true,
+    /** 内置目录模型：种子升级时“缺则补插”仅限未被用户清空的供应商。 */
+    val isBuiltin: Boolean = false,
 )
 
 @Entity(tableName = "prompt_presets")

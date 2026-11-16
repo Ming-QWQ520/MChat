@@ -1,6 +1,6 @@
 # MChat
 
-MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose + Material3 打造，基于 [openai-kotlin](https://github.com/Aallam/openai-kotlin) 的流式传输，多 Provider（DeepSeek / ChatGPT / 智谱 GLM / Grok）开箱即用，本地优先、零遥测。
+MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose + Material3 打造，基于 **OkHttp + okhttp-sse + Gson 原生实现**的流式传输（不依赖任何 OpenAI SDK），默认内置 DeepSeek，支持用户自行接入任意 OpenAI 兼容服务，本地优先、零遥测。
 
 - **版本**：0.1.0（versionCode 1，全程锁定，CI 强制校验）
 - **包名**：`com.ming.mchat`
@@ -14,18 +14,21 @@ MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose
 
 ## 功能列表
 
-- **DeepSeek 风格 UI**：品牌蓝 #4D6BFE 三色体系（浅 #F7F7F8 / 深 #0F1014）；助手消息扁平无气泡 + 徽标，用户消息蓝色气泡；空会话居中欢迎页；输入区 28dp 大圆角悬浮容器，内嵌当前模型名 chip / 上下文环 / 深度思考三档；流式输出 90ms 节流 + 底部智能跟随（上滑阅读不打断）。
-- **流式聊天**：基于 openai-kotlin `chatCompletions` Flow 的逐字输出，可随时停止（Job.cancel，不吞 CancellationException），末帧获取服务端 usage。
-- **四 Provider**：DeepSeek、ChatGPT、智谱 GLM、Grok，全部通过 baseUrl 切换接入；能力字段驱动参数分支（temperature / max_completion_tokens / system role=developer / reasoning_content / stream usage）。
+- **DeepSeek 风格 UI**：品牌蓝 #4D6BFE 三色体系（浅 #F7F7F8 / 深 #0F1014）；助手消息扁平无气泡 + DeepSeek 鲸鱼徽标，用户消息蓝色气泡；空会话居中欢迎页（logo + 问候语）；输入区 28dp 大圆角悬浮容器，内嵌当前模型名 chip / 上下文进度环 / 深度思考四档 pill（高对比选中态，深浅色均清晰）；流式输出 90ms 节流 + 底部智能跟随（上滑阅读不打断）。
+- **流式聊天**：OkHttp SSE（EventSource 桥接 channelFlow，readTimeout=0 不掐断）逐字输出，可随时停止（awaitClose 关闭连接，不吞 CancellationException）；usage 从最后一个 chunk 捕获（stream_options.include_usage），含缓存命中 / 推理 token 明细。
+- **默认仅 DeepSeek**：内置 deepseek-flash（默认，131072 上下文，视觉 + 思考）与 deepseek-v4-pro（思考模型）；旧模型名（deepseek-4.1-* / deepseek-chat / deepseek-reasoner）自动 remap，会话无缝迁移。
+- **自定义供应商**：设置 → 添加供应商（Base URL / API Key / 展示名）；支持"从 API 拉取模型列表"（GET /models，OpenAI 兼容 Bearer / Anthropic x-api-key 双认证）；模型可添加 / 编辑 / 删除（删除后会话自动 remap 兜底）；DeepSeek 可一键恢复内置模型。
+- **思考模式（对齐官方文档）**：reasoning_effort 四档 none / low / high / max（默认 high），DeepSeek 端"关闭"档显式发送 none；思考开启时不发送 temperature（官方文档：思考模式下不生效）；思维链 reasoning_content 折叠卡片（正在思考… / 已深度思考，折叠时显示摘要，点击展开），历史消息重新打开仍可查看（落库持久化）；设置中可关闭默认折叠。
+- **长按消息菜单（DeepSeek 端交互）**：底部弹出操作单，从上到下依次：复制（整段 Markdown 原文）/ 选择文本（选择格式化后文本）/ 查看原格式（底部抽屉显示原始 Markdown 源码）/ 重新生成（最后一条助手消息）/ 删除。
 - **Token 统计双轨**：服务端 usage 优先，本地估算（JTokkit + 字符兜底）补偿；消息气泡展示 输入/输出/总数/模型/时延，流式中显示 `≈`，结束后切换真实值；按天按模型聚合，标题生成等辅助消耗单独记账。
 - **附件**：Photo Picker 多选图片（最多 9 张，不申请存储权限）、txt/md/csv/json 文本、PDF（PdfBox-Android 按页提取）；图片自动压缩（长边 1568 / JPEG 85 / 单图 4MB / 剥离 EXIF / 透明铺白底 / HEIC 兼容）；附件文本以 `<untrusted_file>` 包裹注入并附安全声明。
 - **提示词系统**：内置 4 个预设（翻译助手 / 文档总结 / 代码审查 / 写作润色）+ 自定义 CRUD + 导入导出；Mustache 子集模板引擎（`{{var}}`，未定义保留原样），内置变量 date/time/model/app_version/attachment_names/locale；注入优先级 单条 > 会话 > 全局；注入扫描只标记不删除，发送前确认。
 - **会话标题状态机**：DEFAULT → AUTO_TRUNCATE（首条用户消息兜底）→ AUTO_LLM（首轮结束异步生成）；MANUAL 之后任何自动流程不可覆盖（SQL 层守卫）；长按/重新生成，按 convId Mutex 防并发。
-- **历史抽屉**：左边缘右滑打开（+ 顶栏菜单冗余入口）；三段布局（模型卡片+新建对话 / 按今天-昨天-7天-30天-更早分组 sticky 列表 / 设置）；长按重命名、滑动删除、级联清理消息与附件文件。
-- **思考强度 & 输出上限**：思考强度三档（低/高/最高，默认最高，不支持自动禁用）；输出上限三模式（默认不发送 max_tokens / 手动 / 自动=上下文 50%）。
-- **上下文环 & DeepSeek 余额**：环形指示器内嵌于输入框功能行；环身=下一轮请求上下文占用/contextWindow（<80% 品牌蓝 / 80~95% 橙 / >95% 红，服务端 usage 优先、本地估算前缀 ≈）；DeepSeek 环心显示余额（>999 缩写 1.2K），点击展开 token 拆分与余额明细；刷新时机=进页/回前台/对话结束/测试连接/手动，失败静默保留缓存。
-- **完整设置页**：九大分组（外观 / 模型与 Provider / 提示词 / 会话与标题 / 附件 / 用量统计 / 安全与隐私 / 数据管理 / 关于），全部 DataStore 持久化即时生效。
-- **错误透传**：HTTP 400/413 等状态码与 Provider 错误信息完整透传，不吞错。
+- **历史抽屉（重构）**：DeepSeek logo + 当前模型卡片 + 新建对话 / 搜索 / 置顶与时间分组（当前会话品牌蓝高亮）/ 设置入口；长按菜单（置顶 / 重命名 / 删除）；右滑删除需二次确认；删除当前会话同步重置状态（修复快速发消息竞态）；聊天背景图为图片时抽屉与设置页不显示背景图。
+- **思考强度 & 输出上限**：思考四档（关闭/低/高/最高，默认高）；输出上限三模式（默认不发送 max_tokens / 手动 / 自动=上下文 50%）。
+- **上下文环 & DeepSeek 余额**：圆形进度环内嵌于输入框功能行，随上下文增加平滑填充（400ms 动画）；环身=下一轮请求上下文占用/contextWindow（<80% 品牌蓝 / 80~95% 橙 / >95% 红，服务端 usage 优先、本地估算前缀 ≈）；DeepSeek 环心显示余额（>999 缩写 1.2K），点击展开 token 拆分与余额明细；低余额提示条点击即可关闭（余额刷新后若仍低重新出现）；刷新时机=进页/回前台/对话结束/测试连接/手动，失败静默保留缓存。
+- **完整设置页**：九大分组（外观 / 模型与 Provider / 提示词 / 会话与标题 / 附件 / 用量统计 / 安全与隐私 / 数据管理 / 关于），全部 DataStore 持久化即时生效；供应商列表与余额卡展示 DeepSeek logo；API Key 状态实时校验（修复 providers 异步加载时误报“未配置”）。
+- **错误码映射**：HTTP 400/401/402/403/404/408/413/422/429/5xx → 中文可读提示（含服务端错误详情透传）；网络异常（DNS / 超时 / SSL）分类描述；finish_reason（length / content_filter / 资源不足等）语义化。
 
 ## 技术栈
 
@@ -36,7 +39,7 @@ MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose
 | 架构 | 多模块 · MVVM · Repository |
 | 依赖注入 | Hilt 2.52（KSP） |
 | 异步 | Coroutines + Flow |
-| LLM 客户端 | openai-kotlin 4.2.0（Ktor 3 + OkHttp 引擎） |
+| LLM 客户端 | **OkHttp 4.12 + okhttp-sse（原生 SSE）+ Gson 2.11**（无 OpenAI SDK 依赖） |
 | 序列化 | Kotlinx Serialization |
 | 本地存储 | Room 2.6.1（KSP）· DataStore Preferences |
 | 图片 | Coil |
@@ -50,7 +53,7 @@ MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose
 app              入口、导航、主题装配、DI 聚合
 core-common      工具、AppResult、设置枚举
 core-data        Room 实体/DAO/数据库、DataStore、Keystore 封装、种子数据
-core-llm         openai-kotlin 客户端工厂、统一流式事件映射、Token 估算、DeepSeek 余额
+core-llm         OkHttp/Gson 原生 LLM 客户端（SSE 流式、usage、错误映射、模型列表拉取）、Token 估算、DeepSeek 余额
 core-prompt      提示词预设、模板引擎、注入解析、注入扫描
 core-attachment  图片压缩、文本/PDF 提取、附件仓库
 core-theme       MD3 主题、动态取色、液态玻璃视觉层、外观设置
@@ -70,12 +73,10 @@ feature-title    会话标题生成器（状态机）
 
 | Provider | Base URL | 模型 |
 | --- | --- | --- |
-| DeepSeek | `https://api.deepseek.com/v1` | DeepSeek-4.1Flash · DeepSeek-4.1Pro（reasoning_content，131072 上下文，旧模型自动 remap） |
-| ChatGPT | `https://api.openai.com/v1` | gpt-4o · gpt-4o-mini · o3-mini（max_completion_tokens / 不支持 temperature / developer role） |
-| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | glm-4-plus · glm-4v-plus（视觉） · glm-4-flash |
-| Grok | `https://api.x.ai/v1` | grok-2-latest · grok-2-vision-latest（视觉） · grok-beta（流式 usage 不稳定→本地估算） |
+| DeepSeek（内置） | `https://api.deepseek.com` | deepseek-flash（默认，视觉+思考）· deepseek-v4-pro（思考） |
+| 自定义（用户添加） | 任意 OpenAI 兼容端点 | 从 API 拉取或手动添加，可编辑 / 删除 |
 
-首次启动自动 seed（只插不覆盖用户 Key）。在 设置 → 模型与 Provider 中填入 API Key（Keystore 加密存储）、可测试连接、切换默认模型、调整 Base URL。
+首次启动自动 seed（只插不覆盖用户 Key）。在 设置 → 模型与 Provider 中：填入 API Key（Keystore 加密存储）、测试连接、切换默认模型、调整 Base URL；**添加供应商**接入任意 OpenAI 兼容服务（填 Base URL / API Key 后可一键拉取模型列表）；模型支持添加 / 编辑 / 删除；DeepSeek 供应商可一键恢复内置模型。旧版本内置的 ChatGPT / GLM / Grok 升级时自动移除（已配置 Key 的保留为自定义供应商）。
 
 ## 构建步骤
 
@@ -117,11 +118,11 @@ cd MChat
 ## 安全说明
 
 - API Key 使用 Android Keystore（AES/GCM 256）加密，Room 只存密文引用，绝不明文落盘；仓库不含任何真实密钥。
-- openai-kotlin `LoggingConfig(logLevel = NONE)`，任何构建都不输出请求日志。
+- openai-kotlin 已移除，OkHttp 客户端不启用任何请求日志，任何构建都不输出敏感信息。
 - 附件文本以 `<untrusted_file>` 强分隔符包裹 + 安全声明；注入扫描只标记不删除，发送前需用户确认。
 - LLM 输出永远不会直接执行系统命令；工具调用层要求白名单、参数校验、用户确认与审计日志。
 - 余额查询仅访问 `https://api.deepseek.com/user/balance`，Key 不落日志。
 
 ## License
 
-MIT License © Ming-QWQ520（详见 [LICENSE](LICENSE)）。依赖及其许可：openai-kotlin（MIT）、Ktor（Apache-2.0）、PdfBox-Android（Apache-2.0）、JTokkit（MIT）、Coil（Apache-2.0）、Compose/Material3（Apache-2.0）。
+MIT License © Ming-QWQ520（详见 [LICENSE](LICENSE)）。依赖及其许可：OkHttp / okhttp-sse（Apache-2.0）、Gson（Apache-2.0）、PdfBox-Android（Apache-2.0）、JTokkit（MIT）、Coil（Apache-2.0）、Compose/Material3（Apache-2.0）。

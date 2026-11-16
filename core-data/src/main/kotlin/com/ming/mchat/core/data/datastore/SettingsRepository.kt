@@ -45,12 +45,14 @@ data class AppearanceSettings(
 /** 模型行为设置。 */
 data class ModelBehaviorSettings(
     val defaultProviderId: String = "deepseek",
-    val defaultModelId: String = "deepseek-4.1-flash",
+    val defaultModelId: String = "deepseek-flash",
     val globalTemperature: Double = 0.7,
-    val reasoningEffort: ReasoningEffortLevel = ReasoningEffortLevel.MAX,
+    val reasoningEffort: ReasoningEffortLevel = ReasoningEffortLevel.HIGH,
     val outputTokenMode: OutputTokenMode = OutputTokenMode.DEFAULT,
     val outputTokenManualValue: Int = 2048,
     val lowBalanceThreshold: Double = 5.0,
+    /** 思考过程默认折叠显示（DeepSeek 手机端风格）；关闭后始终展开。 */
+    val collapseReasoning: Boolean = true,
 )
 
 /** 提示词与安全设置。 */
@@ -102,12 +104,13 @@ class SettingsRepository @Inject constructor(
     val modelBehavior: Flow<ModelBehaviorSettings> = dataStore.data.map { p ->
         ModelBehaviorSettings(
             defaultProviderId = p[Keys.defaultProviderId] ?: "deepseek",
-            defaultModelId = p[Keys.defaultModelId] ?: "deepseek-4.1-flash",
+            defaultModelId = p[Keys.defaultModelId] ?: "deepseek-flash",
             globalTemperature = p[Keys.globalTemperature] ?: 0.7,
-            reasoningEffort = enumOf(p[Keys.reasoningEffort], ReasoningEffortLevel.MAX),
+            reasoningEffort = enumOf(p[Keys.reasoningEffort], ReasoningEffortLevel.HIGH),
             outputTokenMode = enumOf(p[Keys.outputTokenMode], OutputTokenMode.DEFAULT),
             outputTokenManualValue = p[Keys.outputTokenManualValue] ?: 2048,
             lowBalanceThreshold = p[Keys.lowBalanceThreshold] ?: 5.0,
+            collapseReasoning = p[Keys.collapseReasoning] ?: true,
         )
     }
 
@@ -161,6 +164,7 @@ class SettingsRepository @Inject constructor(
             p[Keys.outputTokenMode] = value.outputTokenMode.name
             p[Keys.outputTokenManualValue] = value.outputTokenManualValue
             p[Keys.lowBalanceThreshold] = value.lowBalanceThreshold
+            p[Keys.collapseReasoning] = value.collapseReasoning
         }
     }
 
@@ -209,6 +213,7 @@ class SettingsRepository @Inject constructor(
         val outputTokenMode = stringPreferencesKey("outputTokenMode")
         val outputTokenManualValue = intPreferencesKey("outputTokenManualValue")
         val lowBalanceThreshold = doublePreferencesKey("lowBalanceThreshold")
+        val collapseReasoning = booleanPreferencesKey("collapseReasoning")
 
         val defaultPresetId = longPreferencesKey("defaultPresetId")
         val appendGlobalSystemPrompt = booleanPreferencesKey("appendGlobalSystemPrompt")

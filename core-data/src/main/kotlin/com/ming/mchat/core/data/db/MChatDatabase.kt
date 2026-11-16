@@ -29,6 +29,14 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
+/** v2 → v3：消息表新增思维链列（reasoningContent）；模型表新增内置标记（isBuiltin）。 */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN reasoningContent TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE model_configs ADD COLUMN isBuiltin INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(
     entities = [
         ConversationEntity::class,
@@ -40,7 +48,7 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         UsageDailyEntity::class,
         AuxUsageEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)

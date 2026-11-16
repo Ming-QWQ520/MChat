@@ -59,17 +59,22 @@ data class ChatUiState(
     val streamingReasoning: String = "",
     val streamingEstimatedTokens: Int = 0,
     val providerId: String = "deepseek",
-    val modelId: String = "deepseek-4.1-flash",
-    val modelDisplayName: String = "DeepSeek-4.1Flash",
+    val modelId: String = "deepseek-flash",
+    val modelDisplayName: String = "DeepSeek-Flash",
     val modelSupportsVision: Boolean = false,
     val modelSupportsReasoning: Boolean = false,
-    val reasoningEffort: ReasoningEffortLevel = ReasoningEffortLevel.MAX,
+    val reasoningEffort: ReasoningEffortLevel = ReasoningEffortLevel.HIGH,
     val contextWindow: Int = 131072,
     val usedPromptTokens: Int = 0,
     val contextEstimated: Boolean = true,
     val presetName: String? = null,
     val balance: com.ming.mchat.core.llm.BalanceState? = null,
     val lowBalance: Boolean = false,
+    /** 用户已手动关闭低余额提示；余额数据刷新后若仍低则重新显示。 */
+    val lowBalanceDismissed: Boolean = false,
+    val balanceUpdatedStamp: Long? = null,
+    /** 思考过程默认折叠（设置可关）。 */
+    val collapseReasoning: Boolean = true,
     val conversations: List<ConversationEntity> = emptyList(),
     val pendingAttachments: List<PendingAttachment> = emptyList(),
     val injectionWarnings: List<String> = emptyList(),
@@ -81,6 +86,8 @@ data class ChatUiState(
     val modelsByProvider: Map<String, List<ModelConfigEntity>> = emptyMap(),
 ) {
     val isDeepSeek: Boolean get() = providerId == BalanceService.DEEPSEEK_ID
+    /** 是否展示低余额提示条（未关闭且余额确实低）。 */
+    val showLowBalanceNotice: Boolean get() = isDeepSeek && lowBalance && !lowBalanceDismissed
 }
 
 @HiltViewModel
@@ -120,6 +127,7 @@ class ChatViewModel @Inject constructor(
                             providers = providers,
                             modelsByProvider = modelsByProvider,
                             reasoningEffort = behavior.reasoningEffort,
+                            collapseReasoning = behavior.collapseReasoning,
                         )
                         val currentModel = modelsByProvider[state.providerId]?.firstOrNull { it.modelId == state.modelId }
                         next = next.copy(
@@ -184,15 +192,18 @@ class ChatViewModel @Inject constructor(
                 }
             }
         }
-        // 余额 + 低余额阈值
+        // 余额 + 低余额阈值：余额数据刷新（updatedAt 变化）时重置“已关闭提示”标记
         viewModelScope.launch {
             combine(balanceService.state, settingsRepository.modelBehavior) { balance, behavior ->
                 balance to behavior.lowBalanceThreshold
             }.collect { (balance, threshold) ->
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    val freshData = balance?.updatedAt != null && balance.updatedAt != state.balanceUpdatedStamp
+                    state.copy(
                         balance = balance,
                         lowBalance = balance != null && balance.error == null && balance.totalBalance < threshold,
+                        lowBalanceDismissed = if (freshData) false else state.lowBalanceDismissed,
+                        balanceUpdatedStamp = balance?.updatedAt ?: state.balanceUpdatedStamp,
                     )
                 }
             }
@@ -207,6 +218,11 @@ class ChatViewModel @Inject constructor(
 
     fun clearError() {
         _uiState.update { it.copy(error = null) }
+    }
+
+    /** 关闭低余额提示条；余额数据刷新后若仍低会重新出现。 */
+    fun dismissLowBalance() {
+        _uiState.update { it.copy(lowBalanceDismissed = true) }
     }
 
     fun send() {
@@ -428,12 +444,15 @@ class ChatViewModel @Inject constructor(
                         streamingReasoning = reasoningBuilder.toString(),
                     )
                 }
+                val partialContent = contentBuilder.toString()
+                val partialReasoning = reasoningBuilder.toString()
                 withContext(NonCancellable + Dispatchers.IO) {
                     persistAssistantMessage(
                         conversationId = conversationId,
                         model = model,
-                        content = contentBuilder.toString(),
-                        reasoningTokens = tokenEstimator.estimateTokens(reasoningBuilder.toString(), model.modelId),
+                        content = partialContent,
+                        reasoningContent = partialReasoning.ifBlank { null },
+                        reasoningTokens = tokenEstimator.estimateTokens(partialReasoning, model.modelId),
                         usage = serverUsage,
                         estimatedPromptTokens = estimatedPromptTokens,
                         startedAt = startedAt,
@@ -456,6 +475,7 @@ class ChatViewModel @Inject constructor(
                 conversationId = conversationId,
                 model = model,
                 content = contentBuilder.toString(),
+                reasoningContent = reasoningBuilder.toString().ifBlank { null },
                 reasoningTokens = tokenEstimator.estimateTokens(reasoningBuilder.toString(), model.modelId),
                 usage = serverUsage,
                 estimatedPromptTokens = estimatedPromptTokens,
@@ -476,13 +496,14 @@ class ChatViewModel @Inject constructor(
         conversationId: Long,
         model: ModelConfigEntity,
         content: String,
+        reasoningContent: String?,
         reasoningTokens: Int,
         usage: LlmStreamEvent.Usage?,
         estimatedPromptTokens: Int,
         startedAt: Long,
         finishReason: String?,
     ) {
-        if (content.isBlank()) return
+        if (content.isBlank() && reasoningContent.isNullOrBlank()) return
         val latencyMs = System.currentTimeMillis() - startedAt
         val promptTokens: Int
         val completionTokens: Int
@@ -501,6 +522,7 @@ class ChatViewModel @Inject constructor(
                 conversationId = conversationId,
                 role = Role.ASSISTANT,
                 content = content,
+                reasoningContent = reasoningContent,
                 createdAt = System.currentTimeMillis(),
                 promptTokens = promptTokens,
                 completionTokens = completionTokens,
@@ -566,7 +588,7 @@ class ChatViewModel @Inject constructor(
                     streamingReasoning = "",
                     streamingEstimatedTokens = 0,
                     providerId = behavior.defaultProviderId,
-                    modelId = behavior.defaultModelId,
+                    modelId = defaultModel?.modelId ?: behavior.defaultModelId,
                     modelDisplayName = defaultModel?.displayName ?: behavior.defaultModelId,
                     modelSupportsVision = defaultModel?.supportsVision ?: false,
                     modelSupportsReasoning = defaultModel?.supportsReasoning ?: false,
@@ -609,6 +631,24 @@ class ChatViewModel @Inject constructor(
     }
 
     fun deleteConversation(id: Long) {
+        // 先同步重置当前会话状态，避免删除后快速发消息时复用已删除的会话 id
+        if (id == _uiState.value.conversationId) {
+            streamJob?.cancel()
+            messagesJob?.cancel()
+            _uiState.update {
+                it.copy(
+                    conversationId = 0L,
+                    title = "新对话",
+                    messages = emptyList(),
+                    isStreaming = false,
+                    streamingContent = "",
+                    streamingReasoning = "",
+                    streamingEstimatedTokens = 0,
+                    usedPromptTokens = 0,
+                    contextEstimated = true,
+                )
+            }
+        }
         viewModelScope.launch {
             conversationRepository.deleteCascade(id)
             if (id == _uiState.value.conversationId) {

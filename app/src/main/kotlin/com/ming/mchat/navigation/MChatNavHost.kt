@@ -10,7 +10,7 @@ import com.ming.mchat.feature.chat.ChatScreen
 import com.ming.mchat.feature.settings.ProviderEditorScreen
 import com.ming.mchat.feature.settings.SettingsScreen
 
-/** 全局导航：聊天（起点）→ 设置 → Provider 详情。 */
+/** 全局导航：聊天（起点）→ 设置 → 供应商新建 / 编辑。 */
 @Composable
 fun MChatNavHost() {
     val navController = rememberNavController()
@@ -27,6 +27,17 @@ fun MChatNavHost() {
             SettingsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenProvider = { providerId -> navController.navigate("provider/$providerId") },
+            )
+        }
+        // 新建供应商：路由需注册在 "provider/{providerId}" 之前，精确匹配优先
+        composable("provider/new") {
+            ProviderEditorScreen(
+                onBack = { navController.popBackStack() },
+                onOpenProvider = { providerId ->
+                    navController.navigate("provider/$providerId") {
+                        popUpTo("provider/new") { inclusive = true }
+                    }
+                },
             )
         }
         composable(

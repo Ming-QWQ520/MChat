@@ -1,6 +1,7 @@
 package com.ming.mchat.feature.chat.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,6 +78,7 @@ fun ChatBottomArea(
     onContextRingClick: () -> Unit,
     onModelChipClick: () -> Unit,
     onReasoningEffortChange: (ReasoningEffortLevel) -> Unit,
+    onDismissLowBalance: () -> Unit,
     glassEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -90,7 +92,8 @@ fun ChatBottomArea(
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
-            if (state.isDeepSeek && state.lowBalance) {
+            if (state.showLowBalanceNotice) {
+                // 低余额提示：点击即可关闭（余额刷新后若仍低会重新出现）
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -98,6 +101,7 @@ fun ChatBottomArea(
                         .padding(bottom = 8.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.errorContainer)
+                        .clickable(onClick = onDismissLowBalance)
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 ) {
                     Box(
@@ -108,7 +112,7 @@ fun ChatBottomArea(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "DeepSeek 余额较低（${state.balance?.totalBalance ?: "?"} ${state.balance?.currency ?: "CNY"}），建议关注用量",
+                        "DeepSeek 余额较低（${state.balance?.totalBalance ?: "?"} ${state.balance?.currency ?: "CNY"}），点击关闭",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         maxLines = 1,
@@ -307,9 +311,10 @@ private fun ModelChip(
 }
 
 /**
- * 深度思考强度 pill（DeepSeek“深度思考”按钮的三档版本）：
- * - 最低档（低）为关闭态样式；高 / 最高为高亮态；
- * - 点击弹出三档选择；模型不支持推理时禁用（半透明）。
+ * 深度思考强度 pill（对齐 DeepSeek reasoning_effort：关闭 / 低 / 高 / 最高）：
+ * - 选中态：品牌蓝实底 + 白字（浅色）/ 品牌蓝字 + 亮底（深色），高对比不迷惑；
+ * - 关闭态：中性容器色；模型不支持推理时禁用（半透明）；
+ * - 点击弹出四档选择。
  */
 @Composable
 private fun ThinkingEffortPill(
@@ -318,25 +323,23 @@ private fun ThinkingEffortPill(
     onChange: (ReasoningEffortLevel) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val thinkingOn = level != ReasoningEffortLevel.NONE
     val label = when (level) {
+        ReasoningEffortLevel.NONE -> "深度思考·关"
         ReasoningEffortLevel.LOW -> "深度思考·低"
-        ReasoningEffortLevel.HIGH -> "深度思考·高"
-        ReasoningEffortLevel.MAX -> "深度思考"
+        ReasoningEffortLevel.HIGH -> "深度思考"
+        ReasoningEffortLevel.MAX -> "深度思考·最高"
     }
-    val containerColor = when (level) {
-        ReasoningEffortLevel.LOW -> MaterialTheme.colorScheme.surfaceContainerHighest
-        else -> MaterialTheme.colorScheme.primaryContainer
-    }
-    val contentColor = when (level) {
-        ReasoningEffortLevel.LOW -> MaterialTheme.colorScheme.onSurfaceVariant
-        else -> MaterialTheme.colorScheme.onPrimaryContainer
-    }
+    val containerColor = if (thinkingOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest
+    val contentColor = if (thinkingOn) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
     Box {
         Surface(
             onClick = { if (enabled) expanded = true },
             shape = RoundedCornerShape(50),
             color = containerColor,
             contentColor = contentColor,
+            border = if (thinkingOn) null
+            else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.alpha(if (enabled) 1f else 0.45f),
         ) {
             Row(
@@ -354,9 +357,10 @@ private fun ThinkingEffortPill(
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             listOf(
-                ReasoningEffortLevel.LOW to "低（快速回答）",
-                ReasoningEffortLevel.HIGH to "高",
-                ReasoningEffortLevel.MAX to "最高（默认）",
+                ReasoningEffortLevel.NONE to "关闭（不思考，直接回答）",
+                ReasoningEffortLevel.LOW to "低（快速思考）",
+                ReasoningEffortLevel.HIGH to "高（默认）",
+                ReasoningEffortLevel.MAX to "最高（深入思考）",
             ).forEach { (option, optionLabel) ->
                 DropdownMenuItem(
                     text = { Text(optionLabel) },
@@ -364,6 +368,18 @@ private fun ThinkingEffortPill(
                         if (option == level) {
                             Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                         }
+                    },
+                    trailingIcon = {
+                        Text(
+                            when (option) {
+                                ReasoningEffortLevel.NONE -> "none"
+                                ReasoningEffortLevel.LOW -> "low"
+                                ReasoningEffortLevel.HIGH -> "high"
+                                ReasoningEffortLevel.MAX -> "max"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     },
                     onClick = {
                         expanded = false

@@ -41,9 +41,25 @@ interface ConversationDao {
     @Query("UPDATE conversations SET providerId = :providerId, modelId = :modelId, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateModel(id: Long, providerId: String, modelId: String, updatedAt: Long)
 
-    /** 模型下线迁移：将引用旧模型 id 的会话批量 remap 到新模型（不改 updatedAt 排序）。 */
+    /** 模型下线迁移：同供应商内 remap 模型 id（不改 updatedAt 排序）。 */
     @Query("UPDATE conversations SET modelId = :newModelId WHERE providerId = :providerId AND modelId = :oldModelId")
     suspend fun remapModel(providerId: String, oldModelId: String, newModelId: String)
+
+    /** 跨供应商迁移：同时更新 providerId 与 modelId（模型删除/供应商删除时兑底）。 */
+    @Query(
+        "UPDATE conversations SET providerId = :newProviderId, modelId = :newModelId " +
+            "WHERE providerId = :oldProviderId AND modelId = :oldModelId"
+    )
+    suspend fun remapProviderModel(
+        oldProviderId: String,
+        oldModelId: String,
+        newProviderId: String,
+        newModelId: String,
+    )
+
+    /** 供应商删除时：其全部会话整体迁移到其他供应商。 */
+    @Query("UPDATE conversations SET providerId = :newProviderId, modelId = :newModelId WHERE providerId = :oldProviderId")
+    suspend fun remapAllModels(oldProviderId: String, newProviderId: String, newModelId: String)
 
     /** 自动兜底标题：MANUAL / AUTO_LLM 状态下不允许覆盖。 */
     @Query(
@@ -172,6 +188,9 @@ interface ModelDao {
 
     @Query("DELETE FROM model_configs WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("DELETE FROM model_configs WHERE providerId = :providerId")
+    suspend fun deleteByProvider(providerId: String)
 }
 
 @Dao

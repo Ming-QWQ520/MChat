@@ -113,6 +113,7 @@ class MessageRepository @Inject constructor(
 class ProviderRepository @Inject constructor(
     private val providerDao: ProviderDao,
     private val modelDao: ModelDao,
+    private val conversationDao: ConversationDao,
     private val cryptoManager: CryptoManager,
 ) {
     fun observeProviders(): Flow<List<ProviderConfigEntity>> = providerDao.observeAll()
@@ -156,10 +157,83 @@ class ProviderRepository @Inject constructor(
     suspend fun deleteProvider(providerId: String) {
         val provider = providerDao.getById(providerId) ?: return
         if (provider.isBuiltin) return
+        deleteProviderCascade(providerId)
+    }
+
+    /** 删除自定义供应商（含模型目录）；其会话 remap 到 DeepSeek 兜底模型。 */
+    suspend fun deleteProviderCascade(providerId: String) {
+        val provider = providerDao.getById(providerId) ?: return
+        if (provider.isBuiltin) return
+        val fallback = modelDao.getById("${BalanceServiceIds.DEEPSEEK}:deepseek-flash")
+        if (fallback != null) {
+            conversationDao.remapAllModels(providerId, BalanceServiceIds.DEEPSEEK, fallback.modelId)
+        }
+        modelDao.deleteByProvider(providerId)
         providerDao.delete(providerId)
     }
 
+    /** 新建自定义供应商：id 冲突时自动追加序号；返回最终实体。 */
+    suspend fun createProvider(displayName: String, baseUrl: String, apiKey: String?): ProviderConfigEntity {
+        val sanitizedBase = baseUrl.trim().trimEnd('/')
+        val baseId = displayName.trim()
+            .lowercase()
+            .replace(Regex("[^a-z0-9]+"), "-")
+            .trim('-')
+            .ifBlank { "provider" }
+        var id = baseId
+        var suffix = 1
+        while (providerDao.getById(id) != null) {
+            id = "$baseId-${++suffix}"
+        }
+        val sortOrder = (providerDao.getAll().maxOfOrNull { it.sortOrder } ?: 0) + 1
+        val entity = ProviderConfigEntity(
+            id = id,
+            presetId = "custom",
+            displayName = displayName.trim().ifBlank { id },
+            baseUrl = sanitizedBase,
+            enabled = true,
+            isBuiltin = false,
+            sortOrder = sortOrder,
+        )
+        providerDao.insert(entity)
+        apiKey?.takeIf { it.isNotBlank() }?.let { saveApiKey(id, it) }
+        return entity
+    }
+
+    /** 新增 / 覆盖一个模型配置（providerId + modelId 主键）。 */
+    suspend fun upsertModel(model: ModelConfigEntity) {
+        val existing = modelDao.getById(model.id)
+        if (existing == null) {
+            modelDao.insertAll(listOf(model))
+        } else {
+            modelDao.update(model)
+        }
+    }
+
+    /** 删除模型：优先 remap 到同供应商其他可用模型，无则 DeepSeek 兜底（含供应商切换）。 */
+    suspend fun deleteModel(providerId: String, modelId: String) {
+        val key = "$providerId:$modelId"
+        if (modelDao.getById(key) == null) return
+        val sameProvider = modelDao.getByProvider(providerId)
+            .filter { it.id != key && it.enabled }
+            .firstOrNull()
+        if (sameProvider != null) {
+            conversationDao.remapModel(providerId, modelId, sameProvider.modelId)
+        } else {
+            val fallback = modelDao.getById("${BalanceServiceIds.DEEPSEEK}:deepseek-flash")
+            if (fallback != null) {
+                conversationDao.remapProviderModel(providerId, modelId, BalanceServiceIds.DEEPSEEK, fallback.modelId)
+            }
+        }
+        modelDao.delete(key)
+    }
+
     private fun aliasOf(providerId: String): String = "mchat_key_$providerId"
+}
+
+/** 供应商 id 常量（供 remap 兜底引用，避免 core-data 依赖 core-llm）。 */
+private object BalanceServiceIds {
+    const val DEEPSEEK = "deepseek"
 }
 
 @Singleton

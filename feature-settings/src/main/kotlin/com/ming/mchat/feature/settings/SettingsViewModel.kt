@@ -150,7 +150,15 @@ class SettingsViewModel @Inject constructor(
         usageRepository.observeAuxRecent().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     init {
-        refreshKeyStatus()
+        // 修复：providers 为异步加载，首次列表到达 / 变化时重新检查每个供应商的 Key 状态，
+        // 避免设置页打开瞬间显示“API Key 未配置”的误报。
+        viewModelScope.launch {
+            providerRepository.observeProviders().collect {
+                val map = mutableMapOf<String, Boolean>()
+                it.forEach { provider -> map[provider.id] = providerRepository.hasApiKey(provider.id) }
+                _keyStatus.value = map
+            }
+        }
     }
 
     fun refreshKeyStatus() {

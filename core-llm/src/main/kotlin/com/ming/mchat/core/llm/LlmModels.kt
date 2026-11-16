@@ -4,19 +4,25 @@ import com.ming.mchat.core.common.OutputTokenMode
 import com.ming.mchat.core.common.ReasoningEffortLevel
 import com.ming.mchat.core.data.entity.ModelConfigEntity
 
-/** 统一流式事件：将 openai-kotlin 的 ChatCompletionChunk 映射为领域事件。 */
+/** 统一流式事件：将 SSE chunk 映射为领域事件（与具体 HTTP 实现解耦）。 */
 sealed interface LlmStreamEvent {
     /** 正文增量。 */
     data class Delta(val content: String) : LlmStreamEvent
 
-    /** 思考过程增量（DeepSeek-R1 等推理模型的 reasoning_content）。 */
+    /** 思考过程增量（DeepSeek reasoning_content）。 */
     data class Reasoning(val content: String) : LlmStreamEvent
 
     /** 工具调用增量。 */
     data class ToolCallDelta(val count: Int) : LlmStreamEvent
 
-    /** 服务端 usage（stream_options.include_usage 或部分 Provider 末帧返回）。 */
-    data class Usage(val promptTokens: Int, val completionTokens: Int, val totalTokens: Int) : LlmStreamEvent
+    /** 服务端 usage（stream_options.include_usage，出现在最后一个 chunk）。 */
+    data class Usage(
+        val promptTokens: Int,
+        val completionTokens: Int,
+        val totalTokens: Int,
+        val cacheHitTokens: Int = 0,
+        val reasoningTokens: Int = 0,
+    ) : LlmStreamEvent
 
     /** 流正常结束（携带 finishReason）。 */
     data class Done(val finishReason: String? = null) : LlmStreamEvent
@@ -44,5 +50,5 @@ data class StreamChatParams(
     val temperature: Double = 0.7,
     val outputTokenMode: OutputTokenMode = OutputTokenMode.DEFAULT,
     val outputTokenManualValue: Int = 2048,
-    val reasoningEffort: ReasoningEffortLevel = ReasoningEffortLevel.MAX,
+    val reasoningEffort: ReasoningEffortLevel = ReasoningEffortLevel.HIGH,
 )

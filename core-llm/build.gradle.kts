@@ -29,10 +29,9 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
-    api(libs.openai.client)
-    implementation(libs.ktor.client.core)
-    implementation(libs.ktor.client.okhttp)
-    implementation(libs.ktor.client.logging)
+    api(libs.okhttp)
+    api(libs.okhttp.sse)
+    api(libs.gson)
 
     implementation(libs.jtokkit)
 
