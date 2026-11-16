@@ -92,11 +92,19 @@ cd MChat
 ## CI 说明（android-ci.yml）
 
 - 触发方式：**仅 workflow_dispatch**（手动），防止递归与意外扣分钟。
+- 发布门禁：先运行 `smoke` job（复用 [smoke-test.yml](.github/workflows/smoke-test.yml)），在 GitHub 托管 runner 的 KVM 模拟器（API 30 + API 34 矩阵）上安装并冷启动 debug / release 两个 APK，验证 30 秒进程存活且无 FATAL EXCEPTION，**任一闪退则整条 CI 失败、不会发布 Release**。
 - 步骤：JDK 17 → Gradle 缓存 → 版本锁定校验（0.1.0/1）→ `./gradlew assembleDebug assembleRelease`（同时编译 debug 与 release 两个 APK）→ 产物存在性校验。
 - 成功后：`latest-ci` tag 移动到当前提交，[softprops/action-gh-release@v2](https://github.com/softprops/action-gh-release) 将 `app-debug.apk` 与 `app-release.apk` 一并推送到 `latest-ci` Release（prerelease，`overwrite_files: true`，同名 APK 直接替换、不保留历史）。
 - release 签名：未配置正式 keystore 时回退使用 debug keystore 签名（可通过 `MCHAT_KEYSTORE_FILE` / `MCHAT_KEYSTORE_PASSWORD` / `MCHAT_KEY_ALIAS` / `MCHAT_KEY_PASSWORD` 环境变量注入正式签名）。
-- 失败时：不上传 Release，仅上传 `build.log` 失败日志 artifact。
+- 失败时：不上传 Release，仅上传 `build.log` 失败日志 artifact；若冒烟测试失败，`smoke-logs-api*` artifact 中包含完整 logcat 与 crash buffer（含 FATAL EXCEPTION 堆栈）。
 - 修复循环：手动触发 → 检测状态 → 拉取 `--log-failed` 日志 → 修复推送 → 再次触发，直到 conclusion=success。
+
+## 启动冒烟测试（smoke-test.yml）
+
+- 触发：workflow_dispatch 手动，或被 android-ci.yml 以 `workflow_call` 作为发布门禁调用。
+- 矩阵：API 30（default 镜像）+ API 34（google_apis 镜像），x86_64，KVM 硬件加速。
+- 流程：构建 debug + release APK → 逐个安装 → `am start` 冷启动 → 等待 30 秒 → `pidof` 检查进程存活 + crash buffer 无 `FATAL EXCEPTION`，否则失败并上传 logcat / crash buffer / am-start 日志。
+- 背景：第 2 轮修复的启动闪退（`TemplateEngine` 正则 `}` 未转义，Android ICU 不容忍）在桌面 JVM 单测中无法暴露（JVM 容忍未转义 `}`），构建也全绿——只有真实 Android 运行时能发现。此测试即为堵住该类「单测绿、真机炸」的漏洞而设。
 
 ## 自动迭代说明（auto-iterate.yml）
 

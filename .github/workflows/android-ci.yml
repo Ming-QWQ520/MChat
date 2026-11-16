@@ -7,8 +7,15 @@ permissions:
   contents: write
 
 jobs:
+  # 发布门禁：debug / release APK 必须先在模拟器（API 30 + 34）上通过
+  # 冷启动冒烟测试（进入 App 不闪退），才允许发布到 latest-ci Release。
+  smoke:
+    name: Launch smoke test (emulator)
+    uses: ./.github/workflows/smoke-test.yml
+
   build:
     name: Assemble Debug & Release APK
+    needs: smoke
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

@@ -122,8 +122,13 @@ private fun parseBlocks(text: String): List<MdBlock> {
             }
             line.trimStart().startsWith("#") -> {
                 flushParagraph()
-                val matched = Regex("^(#{1,4})\\s+(.*)$").find(line.trim())!!
-                blocks += MdBlock.Heading(matched.groupValues[1].length, matched.groupValues[2])
+                // 井号超过 4 个或 # 后无空格时按普通段落处理，避免 NPE 崩溃
+                val matched = Regex("^(#{1,4})\\s+(.*)$").find(line.trim())
+                if (matched != null) {
+                    blocks += MdBlock.Heading(matched.groupValues[1].length, matched.groupValues[2])
+                } else {
+                    blocks += MdBlock.Paragraph(line.trim())
+                }
             }
             Regex("^\\s*[-*+]\\s+.+").matches(line) -> {
                 flushParagraph()

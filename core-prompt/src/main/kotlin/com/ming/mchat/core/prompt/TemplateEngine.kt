@@ -12,7 +12,9 @@ import javax.inject.Singleton
 @Singleton
 class TemplateEngine @Inject constructor() {
 
-    private val variablePattern = Regex("\\{\\{\\s*([A-Za-z0-9_]+)\\s*}}")
+    // 注意：Android 的 ICU 正则要求 "}" 必须转义（桌面 JVM 容忍未转义的 "}"）。
+    // 此前 "\s*}}" 在真机上抛 PatternSyntaxException 导致启动即闪退，已修复为 "\s*\}\}"。
+    private val variablePattern = Regex("\\{\\{\\s*([A-Za-z0-9_]+)\\s*\\}\\}")
 
     fun render(
         template: String,
