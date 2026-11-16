@@ -102,6 +102,7 @@ fun AnchoredContextMenu(
 
     // Popup 的 offset 相对父布局原点：先测量父布局在窗口中的原点（0 尺寸锚点，TopStart 对齐）
     var parentOrigin by remember { mutableStateOf(Offset.Zero) }
+    var anchorReady by remember { mutableStateOf(false) }
     // 首帧 parentOrigin 未测量时 offset 可能为 0；入场动画从 0 渐入，校正发生在首帧后，无可见跳动
     val localX = (pressRootOffset.x - measuredW / 2f - parentOrigin.x)
         .coerceIn(marginPx - parentOrigin.x, (screenWidth - measuredW - marginPx - parentOrigin.x).coerceAtLeast(marginPx - parentOrigin.x))
@@ -121,7 +122,10 @@ fun AnchoredContextMenu(
     androidx.compose.foundation.layout.Box(
         Modifier
             .size(0.dp)
-            .onGloballyPositioned { parentOrigin = it.positionInWindow() },
+            .onGloballyPositioned {
+                parentOrigin = it.positionInWindow()
+                anchorReady = true
+            },
     )
     Popup(
         onDismissRequest = onDismiss,
@@ -130,7 +134,8 @@ fun AnchoredContextMenu(
     ) {
         Box(
             modifier.graphicsLayer {
-                alpha = if (reduced) 1f else (0.35f + 0.65f * progress)
+                // 锚点未就绪（首帧）时保持完全透明，避免位置校正前闪现
+                alpha = if (!anchorReady) 0f else if (reduced) 1f else (0.35f + 0.65f * progress)
                 val scale = if (reduced) 1f else (0.92f + 0.08f * progress)
                 scaleX = scale
                 scaleY = scale
