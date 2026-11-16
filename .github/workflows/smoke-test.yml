@@ -1,0 +1,111 @@
+name: Launch Smoke Test
+
+# 启动冒烟测试：在 GitHub 托管 runner 的 KVM 模拟器上安装并冷启动 APK，
+# 验证「进入 App 不闪退」。debug 与 release 产物各测一遍，任一崩溃即失败，
+# 并把 logcat / crash buffer 作为 artifact 上传，供定位堆栈。
+# 触发方式：手动 workflow_dispatch，或被其他 workflow 以 workflow_call 复用。
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  smoke:
+    name: Launch test (API ${{ matrix.api-level }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api-level: 30
+            target: default
+          - api-level: 34
+            target: google_apis
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Build debug & release APKs
+        run: ./gradlew assembleDebug assembleRelease --stacktrace --console=plain
+
+      - name: Launch test on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -memory 2048 -no-snapshot-save
+          disable-animations: true
+          script: |
+            set -x
+
+            # ---------- debug APK ----------
+            adb uninstall com.ming.mchat || true
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c || true
+            adb shell am start -W -n com.ming.mchat/.MainActivity | tee am-start-debug.log
+            sleep 30
+            PID_DEBUG=$(adb shell pidof com.ming.mchat | tr -d '\r' | tr -d '\n')
+            adb logcat -d > logcat-debug.log || true
+            adb logcat -d -b crash > crash-buffer-debug.log || true
+            if [ -z "$PID_DEBUG" ]; then
+              echo "::error::debug APK 启动后进程不存在（闪退）"
+              cat crash-buffer-debug.log || true
+              exit 1
+            fi
+            if grep -q "FATAL EXCEPTION" crash-buffer-debug.log; then
+              echo "::error::debug APK 出现 FATAL EXCEPTION"
+              cat crash-buffer-debug.log || true
+              exit 1
+            fi
+            echo "debug APK 启动冒烟通过（pid=$PID_DEBUG，30 秒后仍存活）"
+
+            # ---------- release APK ----------
+            adb uninstall com.ming.mchat || true
+            adb install -r app/build/outputs/apk/release/app-release.apk
+            adb logcat -c || true
+            adb shell am start -W -n com.ming.mchat/.MainActivity | tee am-start-release.log
+            sleep 30
+            PID_RELEASE=$(adb shell pidof com.ming.mchat | tr -d '\r' | tr -d '\n')
+            adb logcat -d > logcat-release.log || true
+            adb logcat -d -b crash > crash-buffer-release.log || true
+            if [ -z "$PID_RELEASE" ]; then
+              echo "::error::release APK 启动后进程不存在（闪退）"
+              cat crash-buffer-release.log || true
+              exit 1
+            fi
+            if grep -q "FATAL EXCEPTION" crash-buffer-release.log; then
+              echo "::error::release APK 出现 FATAL EXCEPTION"
+              cat crash-buffer-release.log || true
+              exit 1
+            fi
+            echo "release APK 启动冒烟通过（pid=$PID_RELEASE，30 秒后仍存活）"
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-api${{ matrix.api-level }}
+          path: |
+            am-start-*.log
+            logcat-*.log
+            crash-buffer-*.log
+          if-no-files-found: ignore
+          retention-days: 14
