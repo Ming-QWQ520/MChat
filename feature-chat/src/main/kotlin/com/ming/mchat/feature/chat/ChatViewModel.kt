@@ -528,6 +528,11 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** 会话置顶 / 取消置顶。 */
+    fun setPinned(id: Long, pinned: Boolean) {
+        viewModelScope.launch { conversationRepository.setPinned(id, pinned) }
+    }
+
     /** 切换模型：只覆盖当前会话。 */
     fun switchModel(providerId: String, modelId: String) {
         viewModelScope.launch {

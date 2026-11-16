@@ -69,6 +69,10 @@ class ConversationRepository @Inject constructor(
     suspend fun updateModel(conversationId: Long, providerId: String, modelId: String) =
         conversationDao.updateModel(conversationId, providerId, modelId, System.currentTimeMillis())
 
+    /** 会话置顶 / 取消置顶：不影响 updatedAt 排序基准。 */
+    suspend fun setPinned(conversationId: Long, pinned: Boolean) =
+        conversationDao.setPinned(conversationId, pinned)
+
     suspend fun updatePreset(conversationId: Long, presetId: Long?, variablesJson: String?) =
         conversationDao.updatePreset(conversationId, presetId, variablesJson, System.currentTimeMillis())
 

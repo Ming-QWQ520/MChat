@@ -26,6 +26,8 @@ data class ConversationEntity(
     val variableValuesJson: String? = null,
     val providerId: String,
     val modelId: String,
+    /** 会话置顶：置顶后在抽屉顶部独立分组展示。 */
+    val isPinned: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )

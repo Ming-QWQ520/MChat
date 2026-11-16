@@ -83,6 +83,8 @@ git clone https://github.com/Ming-QWQ520/MChat.git
 cd MChat
 ./gradlew assembleDebug
 # 产物：app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleRelease
+# 产物：app/build/outputs/apk/release/app-release.apk（未配置正式 keystore 时使用 debug keystore 签名，可直接安装）
 ```
 
 要求：JDK 17、Android SDK（compileSdk 35）。版本号在 `gradle.properties` 集中锁定（`VERSION_NAME=0.1.0`、`VERSION_CODE=1`），`app/build.gradle.kts` 读取，CI 校验，任何改动版本号的提交都会使构建失败。
@@ -90,15 +92,16 @@ cd MChat
 ## CI 说明（android-ci.yml）
 
 - 触发方式：**仅 workflow_dispatch**（手动），防止递归与意外扣分钟。
-- 步骤：JDK 17 → Gradle 缓存 → 版本锁定校验（0.1.0/1）→ `./gradlew assembleDebug`。
-- 成功后：`latest-ci` tag 移动到当前提交，[softprops/action-gh-release@v2](https://github.com/softprops/action-gh-release) 将 `app-debug.apk` 推送到 `latest-ci` Release（prerelease，`overwrite_files: true`，同名 APK 直接替换、不保留历史）。
+- 步骤：JDK 17 → Gradle 缓存 → 版本锁定校验（0.1.0/1）→ `./gradlew assembleDebug assembleRelease`（同时编译 debug 与 release 两个 APK）→ 产物存在性校验。
+- 成功后：`latest-ci` tag 移动到当前提交，[softprops/action-gh-release@v2](https://github.com/softprops/action-gh-release) 将 `app-debug.apk` 与 `app-release.apk` 一并推送到 `latest-ci` Release（prerelease，`overwrite_files: true`，同名 APK 直接替换、不保留历史）。
+- release 签名：未配置正式 keystore 时回退使用 debug keystore 签名（可通过 `MCHAT_KEYSTORE_FILE` / `MCHAT_KEYSTORE_PASSWORD` / `MCHAT_KEY_ALIAS` / `MCHAT_KEY_PASSWORD` 环境变量注入正式签名）。
 - 失败时：不上传 Release，仅上传 `build.log` 失败日志 artifact。
 - 修复循环：手动触发 → 检测状态 → 拉取 `--log-failed` 日志 → 修复推送 → 再次触发，直到 conclusion=success。
 
 ## 自动迭代说明（auto-iterate.yml）
 
 - 触发：`cron '0 */5 * * *'`（每 5 小时）+ workflow_dispatch 手动调试；`concurrency: auto-iterate`，不并发。
-- 每轮流程：版本校验（不符直接失败并开 issue）→ 打回滚 tag `iter-YYYYMMDDHHMM` → 从 [backlog](.iteration/backlog.md) 按顺序取 5~8 个未完成功能 → `npx skills add Kotlin/kotlin-agent-skills` 加载技能（失败不阻断，history 记录）→ LLM（Anthropic Messages API）携带技能规则生成代码 → 应用 → 自检（禁改版本号/CI 触发/删测试/硬编码密钥）→ 本地 assembleDebug（失败回传修复，最多 3 次）→ skills 审查 → 更新 backlog + 写 history → 提交推送 → 触发 CI 并 watch（失败修复循环最多 3 次）→ 仍失败则 `git reset --hard` 到回滚 tag、force push、开 issue 请求人工介入。
+- 每轮流程：版本校验（不符直接失败并开 issue）→ 打回滚 tag `iter-YYYYMMDDHHMM` → 从 [backlog](.iteration/backlog.md) 按顺序取 5~8 个未完成功能 → `npx skills add Kotlin/kotlin-agent-skills` 加载技能（失败不阻断，history 记录）→ LLM（Anthropic Messages API）携带技能规则生成代码 → 应用 → 自检（禁改版本号/CI 触发/删测试/硬编码密钥）→ 本地 assembleDebug + assembleRelease（与 CI 一致，失败回传修复，最多 3 次）→ skills 审查 → 更新 backlog + 写 history → 提交推送 → 触发 CI 并 watch（失败修复循环最多 3 次）→ 仍失败则 `git reset --hard` 到回滚 tag、force push、开 issue 请求人工介入。
 - 需要的 Secrets：`LLM_API_KEY`（必填；未配置时按设计直接失败并开 issue，不降级）；`LLM_BASE_URL`、`LLM_MODEL`（可选，默认 `https://api.anthropic.com` / `claude-sonnet-4-20250514`）。
 - 版本号全程锁 0.1.0/1；每轮记录见 [.iteration/history/](.iteration/history/)；commit 遵循 `feat(iter): ...` + `Iteration-Round / Backlog-Items / Skills-Review` trailer。
 

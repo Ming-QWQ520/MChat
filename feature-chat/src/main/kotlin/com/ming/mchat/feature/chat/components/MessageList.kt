@@ -18,11 +18,13 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.ming.mchat.core.common.TimeUtils
 import com.ming.mchat.core.data.entity.MessageEntity
 import com.ming.mchat.core.data.entity.Role
 import com.ming.mchat.core.data.entity.UsageSource
@@ -53,6 +56,8 @@ fun MessageList(
     onCopy: (String) -> Unit,
     onDelete: (Long) -> Unit,
     onRegenerate: () -> Unit,
+    onCopyPlain: (String) -> Unit,
+    onShare: (String) -> Unit,
 ) {
     LazyColumn(
         state = listState,
@@ -68,6 +73,8 @@ fun MessageList(
                 onCopy = onCopy,
                 onDelete = onDelete,
                 onRegenerate = onRegenerate,
+                onCopyPlain = onCopyPlain,
+                onShare = onShare,
             )
         }
         if (state.isStreaming) {
@@ -87,6 +94,8 @@ fun MessageBubble(
     onCopy: (String) -> Unit,
     onDelete: (Long) -> Unit,
     onRegenerate: () -> Unit,
+    onCopyPlain: (String) -> Unit,
+    onShare: (String) -> Unit,
 ) {
     val isUser = message.role == Role.USER
     var menuExpanded by remember { mutableStateOf(false) }
@@ -105,6 +114,12 @@ fun MessageBubble(
                 .combinedClickable(onClick = {}, onLongClick = { menuExpanded = true })
                 .padding(12.dp),
         ) {
+            // 时间戳：便于长会话中定位消息
+            Text(
+                text = TimeUtils.formatMessageTime(message.createdAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (isUser) {
                 SelectionContainer { Text(message.content, style = MaterialTheme.typography.bodyMedium) }
             } else {
@@ -126,26 +141,66 @@ fun MessageBubble(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                DropdownMenuItem(
-                    text = { Text("复制") },
-                    leadingIcon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
-                    onClick = { menuExpanded = false; onCopy(message.content) },
-                )
-                if (!isUser && isLastAssistant) {
-                    DropdownMenuItem(
-                        text = { Text("重新生成") },
-                        leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                        onClick = { menuExpanded = false; onRegenerate() },
-                    )
-                }
-                DropdownMenuItem(
-                    text = { Text("删除") },
-                    leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
-                    onClick = { menuExpanded = false; onDelete(message.id) },
-                )
-            }
+            MessageActionsMenu(
+                expanded = menuExpanded,
+                onDismiss = { menuExpanded = false },
+                message = message,
+                isLastAssistant = isLastAssistant,
+                onCopy = onCopy,
+                onCopyPlain = onCopyPlain,
+                onShare = onShare,
+                onDelete = onDelete,
+                onRegenerate = onRegenerate,
+            )
         }
+    }
+}
+
+/**
+ * 消息长按菜单（自定义）：按消息角色动态组装操作项。
+ * - 全部消息：复制 Markdown / 复制纯文本 / 分享 / 删除
+ * - 仅最后一条助手消息：重新生成
+ */
+@Composable
+fun MessageActionsMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    message: MessageEntity,
+    isLastAssistant: Boolean,
+    onCopy: (String) -> Unit,
+    onCopyPlain: (String) -> Unit,
+    onShare: (String) -> Unit,
+    onDelete: (Long) -> Unit,
+    onRegenerate: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text("复制（Markdown）") },
+            leadingIcon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+            onClick = { onDismiss(); onCopy(message.content) },
+        )
+        DropdownMenuItem(
+            text = { Text("复制为纯文本") },
+            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = null) },
+            onClick = { onDismiss(); onCopyPlain(message.content) },
+        )
+        DropdownMenuItem(
+            text = { Text("分享") },
+            leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+            onClick = { onDismiss(); onShare(message.content) },
+        )
+        if (message.role != Role.USER && isLastAssistant) {
+            DropdownMenuItem(
+                text = { Text("重新生成") },
+                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                onClick = { onDismiss(); onRegenerate() },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text("删除") },
+            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+            onClick = { onDismiss(); onDelete(message.id) },
+        )
     }
 }
 

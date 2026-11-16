@@ -194,9 +194,9 @@ $SELECTED_TASKS
       rollback "自检失败（版本号/CI 触发方式/测试删除/硬编码密钥）"
     fi
 
-    # 3. 本地构建修复循环
+    # 3. 本地构建修复循环（与 android-ci.yml 保持一致：同时验证 debug + release）
     attempt=0
-    until ./gradlew -q assembleDebug --console=plain > /tmp/build.log 2>&1; do
+    until ./gradlew -q assembleDebug assembleRelease --console=plain > /tmp/build.log 2>&1; do
       attempt=$((attempt + 1))
       if [ "$attempt" -gt "$MAX_FIX" ]; then
         rollback "本地构建连续 ${MAX_FIX} 次修复仍失败"
@@ -214,7 +214,7 @@ $ERRORS
       python3 .iteration/scripts/apply_llm_output.py /tmp/llm_out.txt || true
       selfcheck || rollback "自检失败"
     done
-    log "本地 assembleDebug 通过（修复 $attempt 次）"
+    log "本地 assembleDebug + assembleRelease 通过（修复 $attempt 次）"
 
     # 4. skills 审查
     REVIEW_OUT=$(call_llm "$SYSTEM" "本地构建已通过。请按 Kotlin Agent Skills 规则审查以下 diff，仅输出一行结论：REVIEW: passed 或 REVIEW: failed - 原因。
@@ -273,7 +273,7 @@ PYEOF
       fi
       log "CI 失败，拉取日志修复（第 $ci_attempt 次）..."
       CI_ERRORS=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>/dev/null | tail -n 150 || echo "无法获取日志")
-      if ! CI_FIX=$(call_llm "$SYSTEM" "远程 CI（assembleDebug）失败（第 $ci_attempt 次修复）。错误摘要：
+      if ! CI_FIX=$(call_llm "$SYSTEM" "远程 CI（assembleDebug + assembleRelease）失败（第 $ci_attempt 次修复）。错误摘要：
 
 $CI_ERRORS
 
@@ -283,7 +283,7 @@ $CI_ERRORS
       echo "$CI_FIX" > /tmp/llm_out.txt
       python3 .iteration/scripts/apply_llm_output.py /tmp/llm_out.txt || true
       selfcheck || rollback "自检失败"
-      if ! ./gradlew -q assembleDebug --console=plain > /tmp/build.log 2>&1; then
+      if ! ./gradlew -q assembleDebug assembleRelease --console=plain > /tmp/build.log 2>&1; then
         log "本地构建失败，继续回传 CI 修复循环"
       fi
       git add -A
@@ -297,7 +297,7 @@ $CI_ERRORS
 - 总耗时：$(elapsed)
 - LLM 调用次数：$LLM_CALLS
 - skills 审查：$REVIEW_RESULT
-- 产物：app-debug.apk 已推送 latest-ci Release（覆盖）"
+- 产物：app-debug.apk 与 app-release.apk 已推送 latest-ci Release（同名覆盖）"
     git add -A
     git commit -q -m "chore(iter): 记录 CI 成功（$ROUND_TAG）" || true
     git push origin main

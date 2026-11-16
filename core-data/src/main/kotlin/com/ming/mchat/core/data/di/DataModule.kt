@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import com.ming.mchat.core.data.db.MChatDatabase
+import com.ming.mchat.core.data.db.MIGRATION_1_2
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -22,6 +23,7 @@ internal object DataModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): MChatDatabase =
         androidx.room.Room.databaseBuilder(context, MChatDatabase::class.java, "mchat.db")
+            .addMigrations(MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
 

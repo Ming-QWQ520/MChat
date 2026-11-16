@@ -20,6 +20,8 @@ import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
@@ -50,7 +52,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ming.mchat.core.common.TimeUtils
 import com.ming.mchat.core.theme.LiquidGlassSurface
-import com.ming.mchat.core.theme.liquidGlass
 
 /** 抽屉会话条目。 */
 data class DrawerConversationItem(
@@ -58,11 +59,15 @@ data class DrawerConversationItem(
     val title: String,
     val updatedAt: Long,
     val isCurrent: Boolean,
+    val isPinned: Boolean = false,
 )
+
+/** 置顶分组使用的固定桶标识（时间桶为 0~4，负数避免冲突）。 */
+private const val PINNED_BUCKET = -1
 
 /**
  * 历史抽屉：三段固定布局。
- * 顶部：当前模型卡片 + 新建对话；中部：按时间分组的历史会话（sticky header）；
+ * 顶部：当前模型卡片 + 新建对话 + 会话搜索框；中部：置顶分组 + 按时间分组的历史会话（sticky header）；
  * 底部：设置入口。液态玻璃开启时抽屉与顶部卡片用 LiquidGlassSurface，列表项保持普通 Surface。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -76,10 +81,12 @@ fun HistoryDrawerContent(
     onSelectConversation: (Long) -> Unit,
     onRenameConversation: (Long, String) -> Unit,
     onDeleteConversation: (Long) -> Unit,
+    onPinConversation: (Long, Boolean) -> Unit = { _, _ -> },
     onOpenModelPicker: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     var renameTarget by remember { mutableStateOf<DrawerConversationItem?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
 
     Column(modifier = modifier) {
         // ---- 顶部：模型卡片 + 新建对话 ----
@@ -121,8 +128,35 @@ fun HistoryDrawerContent(
             }
         }
 
-        // ---- 中部：历史会话列表 ----
-        val grouped = remember(conversations) { conversations.groupBy { TimeUtils.bucketOf(it.updatedAt) }.toSortedMap() }
+        // ---- 会话搜索过滤 ----
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            placeholder = { Text("搜索会话", style = MaterialTheme.typography.bodyMedium) },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, Modifier.size(18.dp)) },
+            textStyle = MaterialTheme.typography.bodyMedium,
+        )
+
+        // ---- 中部：置顶分组 + 时间分组的历史会话列表 ----
+        val query = searchQuery.trim()
+        val filtered = remember(conversations, query) {
+            if (query.isEmpty()) conversations
+            else conversations.filter { it.title.contains(query, ignoreCase = true) }
+        }
+        val grouped = remember(filtered) {
+            val pinned = filtered.filter { it.isPinned }
+            val byTime = filtered.filterNot { it.isPinned }
+                .groupBy { TimeUtils.bucketOf(it.updatedAt) }
+                .toSortedMap()
+            buildList {
+                if (pinned.isNotEmpty()) add(PINNED_BUCKET to pinned)
+                byTime.forEach { (bucket, items) -> add(bucket to items) }
+            }
+        }
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
@@ -135,12 +169,25 @@ fun HistoryDrawerContent(
                         color = MaterialTheme.colorScheme.surface,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(
-                            TimeUtils.bucketLabel(bucket),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 4.dp),
-                        )
+                        ) {
+                            if (bucket == PINNED_BUCKET) {
+                                Icon(
+                                    Icons.Filled.PushPin,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(4.dp))
+                            }
+                            Text(
+                                if (bucket == PINNED_BUCKET) "置顶" else TimeUtils.bucketLabel(bucket),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
                 }
                 items(items = items, key = { it.id }) { item ->
@@ -149,13 +196,14 @@ fun HistoryDrawerContent(
                         onClick = { onSelectConversation(item.id) },
                         onRename = { renameTarget = item },
                         onDelete = { onDeleteConversation(item.id) },
+                        onPin = { onPinConversation(item.id, !item.isPinned) },
                     )
                 }
             }
             item {
-                if (conversations.isEmpty()) {
+                if (filtered.isEmpty()) {
                     Text(
-                        "暂无历史会话\n左上角“新建对话”开始",
+                        if (query.isEmpty()) "暂无历史会话\n左上角“新建对话”开始" else "没有匹配“$query”的会话",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(20.dp),
@@ -194,6 +242,7 @@ private fun ConversationRow(
     onClick: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onPin: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val dismissState = rememberSwipeToDismissBoxState(
@@ -242,8 +291,23 @@ private fun ConversationRow(
                     leadingContent = {
                         Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     },
+                    trailingContent = {
+                        if (item.isPinned) {
+                            Icon(
+                                Icons.Filled.PushPin,
+                                contentDescription = "已置顶",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    },
                 )
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text(if (item.isPinned) "取消置顶" else "置顶") },
+                        leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
+                        onClick = { menuExpanded = false; onPin() },
+                    )
                     DropdownMenuItem(
                         text = { Text("重命名") },
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },

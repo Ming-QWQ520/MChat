@@ -1,6 +1,7 @@
 package com.ming.mchat.feature.chat
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import android.content.Intent
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -43,6 +44,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +57,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ming.mchat.core.common.ChatBackground
+import com.ming.mchat.core.common.MarkdownStripper
 import com.ming.mchat.core.theme.LocalLiquidGlass
 import com.ming.mchat.core.theme.glassBackdrop
 import com.ming.mchat.core.theme.liquidGlass
@@ -83,6 +86,7 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val glass = LocalLiquidGlass.current
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
@@ -151,6 +155,7 @@ fun ChatScreen(
                         title = it.title,
                         updatedAt = it.updatedAt,
                         isCurrent = it.id == state.conversationId,
+                        isPinned = it.isPinned,
                     )
                 },
                 onNewChat = {
@@ -161,6 +166,7 @@ fun ChatScreen(
                 },
                 onRenameConversation = { id, title -> viewModel.renameConversation(id, title) },
                 onDeleteConversation = { id -> viewModel.deleteConversation(id) },
+                onPinConversation = { id, pinned -> viewModel.setPinned(id, pinned) },
                 onOpenModelPicker = { showModelPicker = true },
                 onOpenSettings = {
                     scope.launch { keyboard?.hide(); drawerState.close() }
@@ -250,6 +256,14 @@ fun ChatScreen(
                         onCopy = { clipboard.setText(AnnotatedString(it)) },
                         onDelete = viewModel::deleteMessage,
                         onRegenerate = viewModel::regenerate,
+                        onCopyPlain = { clipboard.setText(AnnotatedString(MarkdownStripper.toPlainText(it))) },
+                        onShare = { text ->
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, text)
+                            }
+                            context.startActivity(Intent.createChooser(intent, "分享消息"))
+                        },
                     )
                     if (showRingDetail) {
                         Popup(

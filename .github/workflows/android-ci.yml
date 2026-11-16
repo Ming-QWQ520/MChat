@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build:
-    name: Assemble Debug APK
+    name: Assemble Debug & Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -31,10 +31,20 @@ jobs:
           grep -qx 'VERSION_CODE=1' gradle.properties || { echo "::error::VERSION_CODE 必须保持 1（版本号全程锁定）"; exit 1; }
           echo "版本锁定校验通过：0.1.0 / 1"
 
-      - name: Build debug APK
+      - name: Build debug and release APKs
         run: |
           set -o pipefail
-          ./gradlew assembleDebug --stacktrace --console=plain 2>&1 | tee build.log
+          ./gradlew assembleDebug assembleRelease --stacktrace --console=plain 2>&1 | tee build.log
+
+      - name: Verify APK artifacts exist
+        run: |
+          set -e
+          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="app/build/outputs/apk/release/app-release.apk"
+          [ -f "$DEBUG_APK" ] || { echo "::error::缺少 debug APK：$DEBUG_APK"; exit 1; }
+          [ -f "$RELEASE_APK" ] || { echo "::error::缺少 release APK：$RELEASE_APK"; exit 1; }
+          echo "Debug APK:    $(du -h "$DEBUG_APK" | cut -f1)  ($DEBUG_APK)"
+          echo "Release APK:  $(du -h "$RELEASE_APK" | cut -f1)  ($RELEASE_APK)"
 
       - name: Move latest-ci tag to this commit
         if: success()
@@ -44,16 +54,22 @@ jobs:
           git tag -f latest-ci "$GITHUB_SHA"
           git push --force origin "refs/tags/latest-ci" || true
 
-      - name: Upload APK to latest-ci Release
+      - name: Upload APKs to latest-ci Release
         if: success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-ci
           prerelease: true
           overwrite_files: true
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
           body: |
             CI 构建产物（每轮 CI 自动覆盖，同名 APK 直接替换，不保留历史）。
+
+            - `app-debug.apk`：Debug 构建（可调试，体积稍大）
+            - `app-release.apk`：Release 构建（未混淆，使用 debug keystore 签名，可直接安装）
+
             构建提交：${{ github.sha }}
 
       - name: Upload failure logs

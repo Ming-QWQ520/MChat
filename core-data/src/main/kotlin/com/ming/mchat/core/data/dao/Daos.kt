@@ -22,10 +22,11 @@ interface ConversationDao {
 
     @Update suspend fun update(c: ConversationEntity)
 
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    /** 置顶优先，其余按最近更新倒序。 */
+    @Query("SELECT * FROM conversations ORDER BY isPinned DESC, updatedAt DESC")
     fun observeAll(): Flow<List<ConversationEntity>>
 
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM conversations ORDER BY isPinned DESC, updatedAt DESC")
     suspend fun getAll(): List<ConversationEntity>
 
     @Query("SELECT * FROM conversations WHERE id = :id")
@@ -33,6 +34,9 @@ interface ConversationDao {
 
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun delete(id: Long)
+
+    @Query("UPDATE conversations SET isPinned = :pinned WHERE id = :id")
+    suspend fun setPinned(id: Long, pinned: Boolean)
 
     @Query("UPDATE conversations SET providerId = :providerId, modelId = :modelId, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateModel(id: Long, providerId: String, modelId: String, updatedAt: Long)

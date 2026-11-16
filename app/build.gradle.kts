@@ -6,6 +6,17 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+// 可选的正式签名配置：通过环境变量注入（CI Secrets → env）。
+// 未配置时 release 构建回退使用 debug keystore 签名，保证 assembleRelease 产物
+// 为已签名的 app-release.apk，可直接安装（适合 CI 分发构建）。
+val releaseKeystoreFile = providers.environmentVariable("MCHAT_KEYSTORE_FILE").orNull
+val releaseKeystorePassword = providers.environmentVariable("MCHAT_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("MCHAT_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("MCHAT_KEY_PASSWORD").orNull
+val hasReleaseKeystore = listOfNotNull(
+    releaseKeystoreFile, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword,
+).size == 4
+
 android {
     namespace = "com.ming.mchat"
     compileSdk = 35
@@ -19,6 +30,17 @@ android {
         versionName = providers.gradleProperty("VERSION_NAME").get()
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = file(releaseKeystoreFile!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -26,6 +48,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // 未提供正式 keystore 时用 debug keystore 兜底，产物为可直接安装的 app-release.apk
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {
