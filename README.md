@@ -8,12 +8,13 @@ MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose
 
 ## 截图（占位）
 
-| 聊天页（默认 MD3） | 历史抽屉 | 液态玻璃（默认关闭，可开启） |
+| 聊天页（DeepSeek 风格） | 历史抽屉 | 液态玻璃（默认关闭，可开启） |
 | :---: | :---: | :---: |
 | ![chat](docs/placeholder-chat.png) | ![drawer](docs/placeholder-drawer.png) | ![glass](docs/placeholder-glass.png) |
 
 ## 功能列表
 
+- **DeepSeek 风格 UI**：品牌蓝 #4D6BFE 三色体系（浅 #F7F7F8 / 深 #0F1014）；助手消息扁平无气泡 + 徽标，用户消息蓝色气泡；空会话居中欢迎页；输入区 28dp 大圆角悬浮容器，内嵌当前模型名 chip / 上下文环 / 深度思考三档；流式输出 90ms 节流 + 底部智能跟随（上滑阅读不打断）。
 - **流式聊天**：基于 openai-kotlin `chatCompletions` Flow 的逐字输出，可随时停止（Job.cancel，不吞 CancellationException），末帧获取服务端 usage。
 - **四 Provider**：DeepSeek、ChatGPT、智谱 GLM、Grok，全部通过 baseUrl 切换接入；能力字段驱动参数分支（temperature / max_completion_tokens / system role=developer / reasoning_content / stream usage）。
 - **Token 统计双轨**：服务端 usage 优先，本地估算（JTokkit + 字符兜底）补偿；消息气泡展示 输入/输出/总数/模型/时延，流式中显示 `≈`，结束后切换真实值；按天按模型聚合，标题生成等辅助消耗单独记账。
@@ -22,7 +23,7 @@ MChat 是一个仅面向 Android 的原生 LLM 聊天客户端：Jetpack Compose
 - **会话标题状态机**：DEFAULT → AUTO_TRUNCATE（首条用户消息兜底）→ AUTO_LLM（首轮结束异步生成）；MANUAL 之后任何自动流程不可覆盖（SQL 层守卫）；长按/重新生成，按 convId Mutex 防并发。
 - **历史抽屉**：左边缘右滑打开（+ 顶栏菜单冗余入口）；三段布局（模型卡片+新建对话 / 按今天-昨天-7天-30天-更早分组 sticky 列表 / 设置）；长按重命名、滑动删除、级联清理消息与附件文件。
 - **思考强度 & 输出上限**：思考强度三档（低/高/最高，默认最高，不支持自动禁用）；输出上限三模式（默认不发送 max_tokens / 手动 / 自动=上下文 50%）。
-- **上下文环 & DeepSeek 余额**：输入区上方环形指示器；环身=会话累计 prompt_tokens/contextWindow（<80% 主题色 / 80~95% 橙 / >95% 红）；DeepSeek 环心显示余额（>999 缩写 1.2K），点击展开 token 拆分与余额明细；刷新时机=进页/回前台/对话结束/测试连接/手动，失败静默保留缓存。
+- **上下文环 & DeepSeek 余额**：环形指示器内嵌于输入框功能行；环身=下一轮请求上下文占用/contextWindow（<80% 品牌蓝 / 80~95% 橙 / >95% 红，服务端 usage 优先、本地估算前缀 ≈）；DeepSeek 环心显示余额（>999 缩写 1.2K），点击展开 token 拆分与余额明细；刷新时机=进页/回前台/对话结束/测试连接/手动，失败静默保留缓存。
 - **完整设置页**：九大分组（外观 / 模型与 Provider / 提示词 / 会话与标题 / 附件 / 用量统计 / 安全与隐私 / 数据管理 / 关于），全部 DataStore 持久化即时生效。
 - **错误透传**：HTTP 400/413 等状态码与 Provider 错误信息完整透传，不吞错。
 
@@ -69,7 +70,7 @@ feature-title    会话标题生成器（状态机）
 
 | Provider | Base URL | 模型 |
 | --- | --- | --- |
-| DeepSeek | `https://api.deepseek.com/v1` | deepseek-chat · deepseek-reasoner（reasoning_content，131072 上下文） |
+| DeepSeek | `https://api.deepseek.com/v1` | DeepSeek-4.1Flash · DeepSeek-4.1Pro（reasoning_content，131072 上下文，旧模型自动 remap） |
 | ChatGPT | `https://api.openai.com/v1` | gpt-4o · gpt-4o-mini · o3-mini（max_completion_tokens / 不支持 temperature / developer role） |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | glm-4-plus · glm-4v-plus（视觉） · glm-4-flash |
 | Grok | `https://api.x.ai/v1` | grok-2-latest · grok-2-vision-latest（视觉） · grok-beta（流式 usage 不稳定→本地估算） |
