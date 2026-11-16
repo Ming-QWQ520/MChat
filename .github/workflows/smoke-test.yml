@@ -53,50 +53,9 @@ jobs:
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -memory 2048 -no-snapshot-save
           disable-animations: true
-          script: |
-            set -x
-
-            # ---------- debug APK ----------
-            adb uninstall com.ming.mchat || true
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
-            adb logcat -c || true
-            adb shell am start -W -n com.ming.mchat/.MainActivity | tee am-start-debug.log
-            sleep 30
-            PID_DEBUG=$(adb shell pidof com.ming.mchat | tr -d '\r' | tr -d '\n')
-            adb logcat -d > logcat-debug.log || true
-            adb logcat -d -b crash > crash-buffer-debug.log || true
-            if [ -z "$PID_DEBUG" ]; then
-              echo "::error::debug APK 启动后进程不存在（闪退）"
-              cat crash-buffer-debug.log || true
-              exit 1
-            fi
-            if grep -q "FATAL EXCEPTION" crash-buffer-debug.log; then
-              echo "::error::debug APK 出现 FATAL EXCEPTION"
-              cat crash-buffer-debug.log || true
-              exit 1
-            fi
-            echo "debug APK 启动冒烟通过（pid=$PID_DEBUG，30 秒后仍存活）"
-
-            # ---------- release APK ----------
-            adb uninstall com.ming.mchat || true
-            adb install -r app/build/outputs/apk/release/app-release.apk
-            adb logcat -c || true
-            adb shell am start -W -n com.ming.mchat/.MainActivity | tee am-start-release.log
-            sleep 30
-            PID_RELEASE=$(adb shell pidof com.ming.mchat | tr -d '\r' | tr -d '\n')
-            adb logcat -d > logcat-release.log || true
-            adb logcat -d -b crash > crash-buffer-release.log || true
-            if [ -z "$PID_RELEASE" ]; then
-              echo "::error::release APK 启动后进程不存在（闪退）"
-              cat crash-buffer-release.log || true
-              exit 1
-            fi
-            if grep -q "FATAL EXCEPTION" crash-buffer-release.log; then
-              echo "::error::release APK 出现 FATAL EXCEPTION"
-              cat crash-buffer-release.log || true
-              exit 1
-            fi
-            echo "release APK 启动冒烟通过（pid=$PID_RELEASE，30 秒后仍存活）"
+          # 注意：该 action 逐行执行 script（每行独立 sh -c），多行 if/函数/变量会失效，
+          # 因此全部逻辑集中在 smoke_launch_check.sh 中单行调用。
+          script: bash .github/scripts/smoke_launch_check.sh
 
       - name: Upload smoke logs
         if: always()
