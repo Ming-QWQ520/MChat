@@ -10,6 +10,8 @@ import com.ming.mchat.core.data.entity.ProviderConfigEntity
 import com.ming.mchat.core.data.repo.ProviderRepository
 import com.ming.mchat.core.data.seed.DatabaseSeeder
 import com.ming.mchat.core.llm.ChatService
+import com.ming.mchat.core.llm.ModelsDevCatalog
+import com.ming.mchat.core.llm.ModelsDevProvider
 import com.ming.mchat.core.llm.readableMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -35,7 +37,12 @@ class ProviderEditorViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val chatService: ChatService,
     private val databaseSeeder: DatabaseSeeder,
+    private val modelsDevCatalog: ModelsDevCatalog,
 ) : ViewModel() {
+
+    init {
+        modelsDevCatalog.ensureLoaded()
+    }
 
     val isNew: Boolean = savedStateHandle.get<String>("providerId") == NEW_PROVIDER_ROUTE
     val providerId: String = if (isNew) "" else savedStateHandle.get<String>("providerId").orEmpty()
@@ -68,6 +75,13 @@ class ProviderEditorViewModel @Inject constructor(
     private val _fetchingModels = MutableStateFlow(false)
     val fetchingModels: StateFlow<Boolean> = _fetchingModels.asStateFlow()
 
+    /** models.dev 目录：新建供应商选择 + 从目录导入模型。 */
+    val catalogState: StateFlow<com.ming.mchat.core.llm.CatalogState> =
+        modelsDevCatalog.state
+
+    private val _catalogBusy = MutableStateFlow(false)
+    val catalogBusy: StateFlow<Boolean> = _catalogBusy.asStateFlow()
+
     /** 新建成功后要跳转到的 providerId；UI 观察后导航到编辑页。 */
     private val _createdProviderId = MutableStateFlow<String?>(null)
     val createdProviderId: StateFlow<String?> = _createdProviderId.asStateFlow()
@@ -97,6 +111,36 @@ class ProviderEditorViewModel @Inject constructor(
             val entity = providerRepository.createProvider(displayName, baseUrl, apiKey.takeIf { it.isNotBlank() })
             _createdProviderId.value = entity.id
         }
+    }
+
+    /** 从 models.dev 目录创建供应商（自动填 baseURL，presetId 关联目录便于后续导入模型）。 */
+    fun createProviderFromCatalog(catalog: ModelsDevProvider, apiKey: String) {
+        viewModelScope.launch {
+            val entity = providerRepository.createProvider(
+                displayName = catalog.name.ifBlank { catalog.id },
+                baseUrl = catalog.api,
+                apiKey = apiKey.takeIf { it.isNotBlank() },
+            )
+            providerRepository.updateProvider(entity.copy(presetId = catalog.id))
+            _createdProviderId.value = entity.id
+        }
+    }
+
+    /** 在线刷新 models.dev 目录。 */
+    fun refreshCatalog() {
+        viewModelScope.launch {
+            _catalogBusy.value = true
+            modelsDevCatalog.refresh()
+                .onSuccess { _testResult.value = "目录已刷新（$it 家供应商）" }
+                .onFailure { _testResult.value = "刷新失败：${it.message ?: "网络错误"}" }
+            _catalogBusy.value = false
+        }
+    }
+
+    /** 匹配当前供应商对应的 models.dev 目录条目（模型导入用）。 */
+    suspend fun matchCatalogProvider(): ModelsDevProvider? {
+        val p = providerRepository.getProvider(providerId)
+        return modelsDevCatalog.matchProvider(p?.presetId, p?.baseUrl, p?.displayName)
     }
 
     // ---------------- Provider 编辑 ----------------
@@ -249,6 +293,36 @@ class ProviderEditorViewModel @Inject constructor(
         viewModelScope.launch {
             databaseSeeder.restoreBuiltinModels(providerId)
             _testResult.value = "内置模型已恢复"
+        }
+    }
+
+    /**
+     * 从 models.dev 目录导入所选模型（勾选制）：
+     * 能力 / 上下文窗口 / 最大输出全部来自目录元数据；已存在的模型跳过。
+     */
+    fun importModelsFromCatalog(providerId: String, models: Map<String, com.ming.mchat.core.llm.ModelsDevModel>) {
+        viewModelScope.launch {
+            val existing = providerRepository.getModels(providerId).map { it.modelId }.toSet()
+            var inserted = 0
+            models.forEach { (mid, meta) ->
+                if (mid in existing) return@forEach
+                providerRepository.upsertModel(
+                    ModelConfigEntity(
+                        id = "$providerId:$mid",
+                        providerId = providerId,
+                        modelId = mid,
+                        displayName = meta.name.ifBlank { mid },
+                        contextTokens = meta.context ?: 32768,
+                        maxOutputTokens = (meta.output ?: 8192).coerceAtMost(32768),
+                        supportsVision = meta.attachment,
+                        supportsStreamUsage = true,
+                        supportsReasoning = meta.reasoning,
+                        supportsTemperature = meta.temperature,
+                    ),
+                )
+                inserted++
+            }
+            _testResult.value = if (inserted == 0) "所选模型均已存在" else "已从目录导入 $inserted 个模型"
         }
     }
 

@@ -8,6 +8,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ming.mchat.core.common.TimeUtils
@@ -135,35 +137,14 @@ fun HistoryDrawerContent(
     Column(
         modifier
             .fillMaxHeight()
-            .background(MaterialTheme.colorScheme.surface),
+            .background(MaterialTheme.colorScheme.surface)
+            // 消费空白区域点击：抽屉关闭动画期间 scrim 已移除，
+            // 未消费的点击会穿透到底层页面（误触输入区“+”附件按钮等）
+            .pointerInput(Unit) { detectTapGestures { } },
     ) {
-        // ---- 顶部：用户信息 + 模型卡片 + 新建/临时 ----
+        // ---- 顶部：搜索 + 模型卡片 + 新建/临时（kelivo：用户栏在底部） ----
         Column(Modifier.padding(horizontal = 16.dp)) {
-            Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // 用户头像（emoji 圆底，kelivo avatarWidget）
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            userAvatarEmoji,
-                            fontSize = androidx.compose.ui.unit.TextUnit(20f, androidx.compose.ui.unit.TextUnitType.Sp),
-                        )
-                    }
-                }
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    userName,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(14.dp))
             // 当前模型卡片：点击切换模型
             Surface(
                 onClick = onOpenModelPicker,
@@ -357,24 +338,40 @@ fun HistoryDrawerContent(
             }
         }
 
-        // ---- 底部：设置入口 ----
-        Surface(
-            onClick = onOpenSettings,
-            color = Color24.transparent,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        // ---- 底部：用户栏（kelivo：头像 + 用户名 + 设置入口） ----
+        Surface(color = androidx.compose.ui.graphics.Color.Transparent, modifier = Modifier.fillMaxWidth()) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .clickable(onClick = onOpenSettings),
             ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            userAvatarEmoji,
+                            fontSize = androidx.compose.ui.unit.TextUnit(16f, androidx.compose.ui.unit.TextUnitType.Sp),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    userName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Icon(
                     Icons.Filled.Settings,
-                    contentDescription = null,
+                    contentDescription = "设置",
                     modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.width(12.dp))
-                Text("设置", style = MaterialTheme.typography.bodyLarge)
             }
         }
     }
@@ -586,12 +583,6 @@ private fun groupConversations(items: List<DrawerConversationItem>): List<Pair<I
         ordered.forEach { bucket -> add(bucket to buckets.getValue(bucket)) }
     }
 }
-
-/** 透明色别名（避免魔法值散落）。 */
-private object Color24 {
-    val transparent = androidx.compose.ui.graphics.Color.Transparent
-}
-
 
 /** 重命名会话对话框。 */
 @Composable

@@ -2,7 +2,6 @@ package com.ming.mchat.feature.chat.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -182,7 +181,7 @@ private fun buildInlineAnnotated(text: String): AnnotatedString = buildAnnotated
 @Composable
 private fun CodeBlockView(block: MdBlock.Code, key: String) {
     val clipboard = LocalClipboardManager.current
-    val dark = isSystemInDarkTheme()
+    val dark = com.ming.mchat.core.theme.LocalIsAppDarkTheme.current
     Surface(
         color = if (dark) Color(0xFF14151A) else Color(0xFF1E2227),
         contentColor = Color(0xFFE6E6E6),

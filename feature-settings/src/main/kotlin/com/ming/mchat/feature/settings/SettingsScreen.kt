@@ -488,12 +488,12 @@ private fun ChatDisplaySettingsPage(viewModel: SettingsViewModel) {
         Column(Modifier.padding(16.dp)) {
             LabeledSegmentedRow(
                 label = "聊天气泡风格",
-                options = listOf("磨砂", "实底"),
+                options = listOf("kelivo 默认", "磨砂", "实底"),
                 selectedIndex = display.bubbleStyle.ordinal,
             ) { index ->
                 viewModel.setChatDisplay(display.copy(bubbleStyle = com.ming.mchat.core.data.datastore.BubbleStyle.entries[index]))
             }
-            SettingCaption("磨砂：半透明 + 发丝描边（kelivo frosted）；实底：不透明卡片")
+            SettingCaption("kelivo 默认：助手消息无气泡直接铺满，用户气泡为主题色浅罩；磨砂：半透明 + 发丝描边；实底：不透明卡片")
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             SwitchRow("显示消息时间戳", display.showTimestamp) {
                 viewModel.setChatDisplay(display.copy(showTimestamp = it))

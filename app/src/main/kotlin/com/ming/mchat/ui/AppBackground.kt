@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.ming.mchat.core.common.ChatBackground
 import com.ming.mchat.core.data.datastore.AppearanceSettings
+import com.ming.mchat.core.theme.LocalIsAppDarkTheme
 import java.io.File
 
 /**
@@ -60,7 +61,8 @@ fun AppBackground(
                 // 图片缺失时回退纯色，避免透明漏底
                 Box(modifier.fillMaxSize().background(scheme.surface))
             } else {
-                val scrim = if (isSystemInDarkTheme()) Color.Black else Color.White
+                // 跟随应用内深色设置（而非系统）：应用深色 + 系统浅色时同样压黑
+                val scrim = if (LocalIsAppDarkTheme.current) Color.Black else Color.White
                 Box(
                     modifier
                         .fillMaxSize()

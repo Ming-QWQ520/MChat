@@ -66,12 +66,12 @@ import com.ming.mchat.feature.chat.ChatUiState
 import java.io.File
 
 /**
- * 底部输入区（kelivo 风格）：
- * 悬浮胶囊输入容器（28dp 圆角 + 屏幕边距 + 发丝描边），内含——
+ * 底部输入区（kelivo ChatInputBar 风格）：
+ * 悬浮胶囊输入容器（28dp 圆角 + 屏幕边距 + 发丝描边），自上而下——
+ * - 附件缩略图行（图片缩略 / 文件卡片，带大小与估算 token，可删除）；
  * - 快捷短语行（闪电按钮展开，animateContentSize）；
- * - 文本输入行：[+] 附件 / 多行输入框 / 发送或停止按钮；
- * - 功能行：当前模型名称 chip（点击切换模型）、上下文环、深度思考强度 pill；
- * - 附件缩略图条与低余额提示也收纳在容器内。
+ * - 多行输入框（占位“发消息”，最大 6 行）；
+ * - 底部功能行：模型 chip（点击切换）· 附件 + · 快捷短语闪电 | 上下文环 · 深度思考 pill · 圆形发送 / 停止；
  * 液态玻璃开启时容器使用 LiquidGlassSurface。
  */
 @Composable
@@ -164,8 +164,37 @@ fun ChatBottomArea(
                     }
                 }
             }
-            // 文本输入行：[+] / 输入框 / 发送或停止
-            Row(verticalAlignment = Alignment.Bottom) {
+            // 输入行（kelivo：纯输入框，按钮全部在底部功能行）
+            OutlinedTextField(
+                value = state.input,
+                onValueChange = onInputChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
+                placeholder = { Text("发消息", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)) },
+                maxLines = 6,
+                minLines = 1,
+                shape = RoundedCornerShape(20.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    cursorColor = MaterialTheme.colorScheme.primary,
+                ),
+            )
+            // 底部功能行：模型 / 附件 / 短语 …… 上下文 / 思考 / 发送（kelivo _CompactSendButton）
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp),
+            ) {
+                ModelChip(
+                    displayName = state.modelDisplayName,
+                    onClick = onModelChipClick,
+                )
+                Spacer(Modifier.width(6.dp))
                 AttachButton(
                     onPickImages = onPickImages,
                     onPickDocuments = onPickDocuments,
@@ -175,77 +204,6 @@ fun ChatBottomArea(
                     enabled = state.quickPhrases.isNotEmpty(),
                     onToggle = { showQuickPhrases = !showQuickPhrases },
                 )
-                OutlinedTextField(
-                    value = state.input,
-                    onValueChange = onInputChange,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 2.dp),
-                    placeholder = { Text("发消息", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    maxLines = 6,
-                    minLines = 1,
-                    shape = RoundedCornerShape(20.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.Transparent,
-                        unfocusedBorderColor = Color.Transparent,
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        cursorColor = MaterialTheme.colorScheme.primary,
-                    ),
-                )
-                if (state.isStreaming) {
-                    // DSH-Go 式插话：生成中可继续输入；有内容时显示发送（排队），同时保留停止按钮
-                    if (state.input.isNotBlank() || state.pendingAttachments.isNotEmpty()) {
-                        FilledIconButton(
-                            onClick = onSend,
-                            modifier = Modifier
-                                .padding(start = 4.dp, bottom = 4.dp)
-                                .size(40.dp),
-                            shape = CircleShape,
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "排队发送")
-                        }
-                    }
-                    FilledIconButton(
-                        onClick = onStop,
-                        modifier = Modifier
-                            .padding(start = 4.dp, bottom = 4.dp)
-                            .size(40.dp),
-                        shape = CircleShape,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            contentColor = MaterialTheme.colorScheme.onSurface,
-                        ),
-                    ) {
-                        Icon(Icons.Filled.Stop, contentDescription = "停止生成")
-                    }
-                } else {
-                    FilledIconButton(
-                        onClick = onSend,
-                        enabled = state.input.isNotBlank() || state.pendingAttachments.isNotEmpty(),
-                        modifier = Modifier
-                            .padding(start = 4.dp, bottom = 4.dp)
-                            .size(40.dp),
-                        shape = CircleShape,
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "发送",
-                        )
-                    }
-                }
-            }
-            // 功能行：模型名称 chip / 预设 / 上下文环 / 深度思考
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp),
-            ) {
-                ModelChip(
-                    displayName = state.modelDisplayName,
-                    onClick = onModelChipClick,
-                )
                 state.presetName?.let { preset ->
                     Text(
                         "· 预设 $preset",
@@ -254,7 +212,7 @@ fun ChatBottomArea(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
-                            .padding(start = 8.dp)
+                            .padding(start = 2.dp)
                             .weight(1f, fill = false),
                     )
                 }
@@ -265,14 +223,52 @@ fun ChatBottomArea(
                     estimated = state.contextEstimated,
                     lowBalance = state.lowBalance && state.isDeepSeek,
                     onClick = onContextRingClick,
-                    diameter = 30.dp,
+                    diameter = 26.dp,
                 )
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(8.dp))
                 ThinkingEffortPill(
                     level = state.reasoningEffort,
                     enabled = state.modelSupportsReasoning,
                     onChange = onReasoningEffortChange,
                 )
+                Spacer(Modifier.width(8.dp))
+                // 圆形发送 / 停止：生成中显示停止；有排队内容时显示排队发送
+                if (state.isStreaming) {
+                    if (state.input.isNotBlank() || state.pendingAttachments.isNotEmpty()) {
+                        FilledIconButton(
+                            onClick = onSend,
+                            modifier = Modifier.size(38.dp),
+                            shape = CircleShape,
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "排队发送", modifier = Modifier.size(17.dp))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    FilledIconButton(
+                        onClick = onStop,
+                        modifier = Modifier.size(38.dp),
+                        shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                        ),
+                    ) {
+                        Icon(Icons.Filled.Stop, contentDescription = "停止生成", modifier = Modifier.size(18.dp))
+                    }
+                } else {
+                    FilledIconButton(
+                        onClick = onSend,
+                        enabled = state.input.isNotBlank() || state.pendingAttachments.isNotEmpty(),
+                        modifier = Modifier.size(38.dp),
+                        shape = CircleShape,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "发送",
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -301,23 +297,24 @@ fun ChatBottomArea(
     }
 }
 
-/** 快捷短语开关（闪电图标）。 */
+/** 快捷短语开关（闪电图标，紧凑 32dp）。 */
 @Composable
 private fun QuickPhraseToggle(
     expanded: Boolean,
     enabled: Boolean,
     onToggle: () -> Unit,
 ) {
-    IconButton(onClick = onToggle, enabled = enabled) {
+    IconButton(onClick = onToggle, enabled = enabled, modifier = Modifier.size(32.dp)) {
         Icon(
             Icons.Filled.Bolt,
             contentDescription = "快捷短语",
+            modifier = Modifier.size(20.dp),
             tint = if (expanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
 
-/** 附件按钮：+ 图标，弹出图片 / 文件选择菜单。 */
+/** 附件按钮：+ 图标（紧凑 32dp），弹出图片 / 文件选择菜单。 */
 @Composable
 private fun AttachButton(
     onPickImages: () -> Unit,
@@ -325,11 +322,12 @@ private fun AttachButton(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { expanded = true }) {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.size(32.dp)) {
             Icon(
                 Icons.Filled.Add,
                 contentDescription = "添加附件",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {

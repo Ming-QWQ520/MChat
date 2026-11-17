@@ -11,6 +11,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -107,6 +108,12 @@ private val KelivoDark = darkColorScheme(
 )
 
 /**
+ * 应用内深色状态（跟随应用主题设置，而非系统）：
+ * 图片背景 scrim、代码块配色等必须读取本值，保证“应用深色 + 系统浅色”时全屏自适应。
+ */
+val LocalIsAppDarkTheme = staticCompositionLocalOf { false }
+
+/**
  * MChat 主题：
  * - 跟随系统（默认）：Android 12+ 动态取色（壁纸色），以下回退 kelivo 默认调色板；
  * - 浅色 / 深色：固定 kelivo 调色板；
@@ -146,6 +153,7 @@ fun MChatTheme(
     CompositionLocalProvider(
         LocalLiquidGlass provides liquidGlass,
         LocalAppSurfaces provides surfaces,
+        LocalIsAppDarkTheme provides darkTheme,
         LocalDensity provides scaledDensity,
     ) {
         MaterialTheme(

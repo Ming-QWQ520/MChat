@@ -1,21 +1,26 @@
 package com.ming.mchat.feature.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
@@ -30,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -53,6 +59,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ming.mchat.core.data.entity.ModelConfigEntity
+import com.ming.mchat.core.llm.CatalogState
+import com.ming.mchat.core.llm.ModelsDevModel
+import com.ming.mchat.core.llm.ModelsDevProvider
 
 /**
  * Provider 编辑 / 新建页：
@@ -90,6 +99,7 @@ fun ProviderEditorScreen(
     var editModelTarget by remember { mutableStateOf<ModelConfigEntity?>(null) }
     var showAddModel by remember { mutableStateOf(false) }
     var deleteModelTarget by remember { mutableStateOf<ModelConfigEntity?>(null) }
+    var showCatalogImport by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
@@ -159,6 +169,11 @@ fun ProviderEditorScreen(
                                 Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text(if (fetchingModels) "拉取中…" else "从 API 拉取")
+                            }
+                            OutlinedButton(onClick = { showCatalogImport = true }) {
+                                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("从目录导入")
                             }
                             if (provider?.id == "deepseek") {
                                 OutlinedButton(onClick = viewModel::restoreBuiltinModels) {
@@ -286,6 +301,13 @@ fun ProviderEditorScreen(
         )
     }
 
+    if (showCatalogImport) {
+        CatalogModelsImportSheet(
+            viewModel = viewModel,
+            onDismiss = { showCatalogImport = false },
+        )
+    }
+
     editModelTarget?.let { target ->
         ModelEditDialog(
             providerId = viewModel.providerId,
@@ -299,12 +321,15 @@ fun ProviderEditorScreen(
     }
 }
 
-/** 新建供应商表单：供应商名称 / Base URL / API Key。 */
+/** 新建供应商表单：目录选择（自动填 baseURL）或手动填写。 */
 @Composable
 private fun NewProviderForm(viewModel: ProviderEditorViewModel) {
     var displayName by remember { mutableStateOf("") }
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
+    var showCatalogPicker by remember { mutableStateOf(false) }
+    val catalogState by viewModel.catalogState.collectAsStateWithLifecycle()
+    val catalogBusy by viewModel.catalogBusy.collectAsStateWithLifecycle()
 
     Surface(
         Modifier.fillMaxWidth(),
@@ -312,7 +337,22 @@ private fun NewProviderForm(viewModel: ProviderEditorViewModel) {
         color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("接入任意 OpenAI 兼容服务（DeepSeek / GLM / Grok / OpenAI / Claude …）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("接入任意 OpenAI 兼容服务；模型与供应商数据来自 models.dev 目录", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedButton(
+                onClick = { showCatalogPicker = true },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = catalogState is CatalogState.Ready,
+            ) {
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    when (val s = catalogState) {
+                        is CatalogState.Ready -> "从目录选择（${s.providers.size} 家）"
+                        is CatalogState.Loading -> "目录加载中…"
+                        is CatalogState.Failed -> "目录不可用，手动填写"
+                    },
+                )
+            }
             OutlinedTextField(
                 value = displayName,
                 onValueChange = { displayName = it },
@@ -336,7 +376,7 @@ private fun NewProviderForm(viewModel: ProviderEditorViewModel) {
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                "创建后可在编辑页“从 API 拉取”模型列表，或手动添加模型。",
+                "创建后可在编辑页“从目录导入”或“从 API 拉取”模型。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -347,7 +387,22 @@ private fun NewProviderForm(viewModel: ProviderEditorViewModel) {
             ) {
                 Text("创建供应商")
             }
+            TextButton(onClick = viewModel::refreshCatalog, enabled = !catalogBusy) {
+                Text(if (catalogBusy) "刷新中…" else "刷新 models.dev 目录")
+            }
         }
+    }
+
+    if (showCatalogPicker) {
+        CatalogProviderPickerSheet(
+            state = catalogState,
+            onDismiss = { showCatalogPicker = false },
+            onSelect = { catalog ->
+                displayName = catalog.name.ifBlank { catalog.id }
+                baseUrl = catalog.api
+                showCatalogPicker = false
+            },
+        )
     }
 }
 
@@ -513,4 +568,176 @@ private fun ModelEditDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+}
+
+/** models.dev 供应商选择底部弹层：搜索 + 列表（名称 / API 地址 / 模型数）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CatalogProviderPickerSheet(
+    state: CatalogState,
+    onDismiss: () -> Unit,
+    onSelect: (ModelsDevProvider) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    val ready = state as? CatalogState.Ready
+    val filtered = remember(ready, query) {
+        val list = ready?.providers.orEmpty()
+        if (query.isBlank()) list
+        else list.filter { it.name.contains(query, true) || it.id.contains(query, true) || it.api.contains(query, true) }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            Text("从 models.dev 目录选择", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("搜索供应商 / API 地址") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+            items(filtered.size) { index ->
+                val p = filtered[index]
+                ListItem(
+                    headlineContent = { Text(p.name.ifBlank { p.id }) },
+                    supportingContent = {
+                        Text(
+                            buildString {
+                                append(p.api.ifBlank { "自定义端点" })
+                                append("  ·  ${p.models.size} 个模型")
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    modifier = Modifier.clickable { onSelect(p) },
+                )
+            }
+            if (filtered.isEmpty()) {
+                item { Text("没有匹配的供应商", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+            }
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+/** 从 models.dev 目录导入模型：能力标签 + 勾选导入（能力/窗口自动带入）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CatalogModelsImportSheet(
+    viewModel: ProviderEditorViewModel,
+    onDismiss: () -> Unit,
+) {
+    var matched by remember { mutableStateOf<ModelsDevProvider?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var query by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        matched = viewModel.matchCatalogProvider()
+        loading = false
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            Text(
+                if (matched == null) "从目录导入模型" else "从目录导入 · ${matched!!.name}",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (loading) "匹配目录中…"
+                else if (matched == null) "未能匹配 models.dev 供应商（可先“刷新目录”或在新建页选择目录供应商）"
+                else "勾选要导入的模型；能力与上下文窗口自动带入",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("搜索模型") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = matched != null,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        val entries = remember(matched, query) {
+            val models = matched?.models.orEmpty().entries.toList()
+            if (query.isBlank()) models
+            else models.filter { it.key.contains(query, true) || it.value.name.contains(query, true) }
+        }
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
+            items(entries.size) { index ->
+                val (mid, meta) = entries[index]
+                ListItem(
+                    leadingContent = {
+                        Checkbox(
+                            checked = mid in selected,
+                            onCheckedChange = { checked ->
+                                selected = if (checked) selected + mid else selected - mid
+                            },
+                        )
+                    },
+                    headlineContent = { Text(meta.name.ifBlank { mid }, style = MaterialTheme.typography.bodyMedium) },
+                    supportingContent = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            CatalogTag(mid, highlight = true)
+                            if (meta.reasoning) CatalogTag("推理")
+                            if (meta.attachment) CatalogTag("视觉")
+                            if (meta.tool_call) CatalogTag("工具")
+                            meta.context?.let { CatalogTag("${it / 1024}K") }
+                        }
+                    },
+                    modifier = Modifier.clickable {
+                        selected = if (mid in selected) selected - mid else selected + mid
+                    },
+                )
+            }
+            if (entries.isEmpty() && !loading) {
+                item { Text("暂无可导入的模型", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+            }
+            item { Spacer(Modifier.height(8.dp)) }
+        }
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+            Button(
+                onClick = {
+                    matched?.let { m ->
+                        viewModel.importModelsFromCatalog(
+                            viewModel.providerId,
+                            selected.mapNotNull { mid -> m.models[mid]?.let { mid to it } }.toMap(),
+                        )
+                    }
+                    onDismiss()
+                },
+                enabled = matched != null && selected.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("导入所选 ${selected.size} 个模型")
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** 目录能力标签小胶囊。 */
+@Composable
+private fun CatalogTag(text: String, highlight: Boolean = false) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (highlight) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (highlight) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
 }

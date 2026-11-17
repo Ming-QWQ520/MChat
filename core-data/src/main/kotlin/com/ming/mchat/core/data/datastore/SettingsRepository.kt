@@ -100,8 +100,8 @@ data class UserProfileSettings(
     val avatarEmoji: String = "🦉",
 )
 
-/** 聊天气泡风格（kelivo：磨砂 / 实底）。 */
-enum class BubbleStyle { FROSTED, SOLID }
+/** 聊天气泡风格（kelivo：默认无助手气泡 / 磨砂 / 实底）。 */
+enum class BubbleStyle { NONE, FROSTED, SOLID }
 
 /** 聊天展示设置。 */
 data class ChatDisplaySettings(
@@ -200,6 +200,15 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setQuickPhrases(value: List<String>) {
         dataStore.edit { it[Keys.quickPhrases] = value.distinct().toSet() }
+    }
+
+    /** 收藏的模型（“providerId:modelId”集合，模型选择器置顶展示）。 */
+    val favoriteModels: Flow<Set<String>> = dataStore.data.map { p ->
+        p[Keys.favoriteModels] ?: emptySet()
+    }
+
+    suspend fun setFavoriteModels(value: Set<String>) {
+        dataStore.edit { it[Keys.favoriteModels] = value }
     }
 
     suspend fun setAppearance(value: AppearanceSettings) {
@@ -325,5 +334,6 @@ class SettingsRepository @Inject constructor(
         val showTimestamp = booleanPreferencesKey("showTimestamp")
         val showMessageNavButtons = booleanPreferencesKey("showMessageNavButtons")
         val quickPhrases = stringSetPreferencesKey("quickPhrases")
+        val favoriteModels = stringSetPreferencesKey("favoriteModels")
     }
 }

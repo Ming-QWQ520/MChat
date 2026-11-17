@@ -109,6 +109,8 @@ data class ChatUiState(
     val userAvatarEmoji: String = "🦉",
     /** 快捷短语（内置 + 自定义）。 */
     val quickPhrases: List<String> = emptyList(),
+    /** 收藏的模型（模型选择器置顶）。 */
+    val favoriteModels: Set<String> = emptySet(),
 ) {
     val isDeepSeek: Boolean get() = providerId == BalanceService.DEEPSEEK_ID
     /** 是否展示低余额提示条（未关闭且余额确实低）。 */
@@ -226,13 +228,17 @@ class ChatViewModel @Inject constructor(
                 }
             }
         }
-        // 展示设置 + 用户资料 + 快捷短语（kelivo）
+        // 展示设置 + 用户资料 + 快捷短语 + 收藏模型（kelivo）
         viewModelScope.launch {
             combine(
                 settingsRepository.chatDisplay,
                 settingsRepository.userProfile,
                 settingsRepository.quickPhrases,
-            ) { display, profile, phrases -> Triple(display, profile, phrases) }.collect { (display, profile, phrases) ->
+                settingsRepository.favoriteModels,
+            ) { display, profile, phrases, favorites ->
+                display to Triple(profile, phrases, favorites)
+            }.collect { (display, rest) ->
+                val (profile, phrases, favorites) = rest
                 _uiState.update {
                     it.copy(
                         bubbleStyle = display.bubbleStyle,
@@ -241,6 +247,7 @@ class ChatViewModel @Inject constructor(
                         userName = profile.userName,
                         userAvatarEmoji = profile.avatarEmoji,
                         quickPhrases = (BUILTIN_QUICK_PHRASES + phrases).distinct(),
+                        favoriteModels = favorites,
                     )
                 }
             }
@@ -441,6 +448,16 @@ class ChatViewModel @Inject constructor(
             val base = it.input
             val next = if (base.isBlank()) phrase else base + "\n" + phrase
             it.copy(input = next)
+        }
+    }
+
+    /** 收藏 / 取消收藏模型（模型选择器星标）。 */
+    fun toggleFavoriteModel(key: String) {
+        viewModelScope.launch {
+            val current = settingsRepository.favoriteModels.first()
+            settingsRepository.setFavoriteModels(
+                if (key in current) current - key else current + key,
+            )
         }
     }
 

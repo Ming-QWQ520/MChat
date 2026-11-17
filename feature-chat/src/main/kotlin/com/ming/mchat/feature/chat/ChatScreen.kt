@@ -75,8 +75,8 @@ import com.ming.mchat.feature.chat.components.ContextRingDetailPopup
 import com.ming.mchat.feature.chat.components.MessageList
 import com.ming.mchat.feature.chat.components.ScrollNavButtons
 import com.ming.mchat.feature.history.HistoryDrawerContent
-import com.ming.mchat.feature.history.ModelPickerSheet
 import com.ming.mchat.feature.history.RenameConversationDialog
+import com.ming.mchat.feature.history.components.ModelPickerSheet
 import java.io.File
 import kotlinx.coroutines.launch
 
@@ -214,8 +214,9 @@ fun ChatScreen(
                 },
                 onOpenModelPicker = { showModelPicker = true },
                 onOpenSettings = {
-                    scope.launch { keyboard?.hide(); drawerState.close() }
-                    onOpenSettings()
+                    // 等抽屉完全关闭再导航：避免设置页在抽屉下方滑入时，
+                    // 抽屉未消费的点击穿透到新页面（误触“附件”等入口）
+                    scope.launch { keyboard?.hide(); drawerState.close(); onOpenSettings() }
                 },
             )
         },
@@ -245,29 +246,20 @@ fun ChatScreen(
                                             if (state.conversationId != 0L) showRename = true
                                         },
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        // 用户头像（点击打开抽屉，长按打开资料设置）
-                                        Text(
-                                            state.userAvatarEmoji,
-                                            fontSize = androidx.compose.ui.unit.TextUnit(
-                                                18f,
-                                                androidx.compose.ui.unit.TextUnitType.Sp,
-                                            ),
-                                        )
-                                        Spacer(Modifier.size(6.dp))
-                                        Text(
-                                            if (state.isTemporary) "临时对话" else state.title,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
                                     Text(
-                                        state.modelDisplayName,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        if (state.isTemporary) "临时对话" else state.title,
+                                        style = MaterialTheme.typography.titleMedium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        // kelivo 副标题格式：模型名 (供应商名)，点击打开模型选择
+                                        "${state.modelDisplayName} (${state.providers.firstOrNull { it.id == state.providerId }?.displayName ?: state.providerId})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.clickable { showModelPicker = true },
                                     )
                                 }
                             },
@@ -312,13 +304,8 @@ fun ChatScreen(
                 ) { padding ->
                     Box(Modifier.fillMaxSize().padding(padding)) {
                         if (displayMessages.isEmpty() && !state.isStreaming) {
-                            EmptyChatWelcome(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 40.dp),
-                                userName = state.userName,
-                                avatarEmoji = state.userAvatarEmoji,
-                            )
+                            // 空会话留白（kelivo：新对话页无欢迎文字/图标，仅顶部标题与底部输入）
+                            Spacer(Modifier.fillMaxSize())
                         } else {
                             MessageList(
                                 state = state,
@@ -382,6 +369,8 @@ fun ChatScreen(
             modelsByProvider = state.modelsByProvider,
             currentProviderId = state.providerId,
             currentModelId = state.modelId,
+            favorites = state.favoriteModels,
+            onToggleFavorite = viewModel::toggleFavoriteModel,
             onSelect = viewModel::switchModel,
             onDismiss = { showModelPicker = false },
         )
@@ -440,48 +429,6 @@ fun ChatScreen(
             dismissButton = {
                 TextButton(onClick = viewModel::dismissInjectionWarning) { Text("取消") }
             },
-        )
-    }
-}
-
-/**
- * 空会话欢迎页（kelivo 风格）：居中头像 + 问候语 + 副标题。
- */
-@Composable
-private fun EmptyChatWelcome(
-    modifier: Modifier = Modifier,
-    userName: String,
-    avatarEmoji: String,
-) {
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(76.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    avatarEmoji,
-                    fontSize = androidx.compose.ui.unit.TextUnit(34f, androidx.compose.ui.unit.TextUnitType.Sp),
-                )
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        Text(
-            if (userName.isBlank()) "你好，我能帮什么忙吗？" else "你好，$userName！我能帮什么忙吗？",
-            style = MaterialTheme.typography.headlineSmall,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "MChat · 本地优先的 AI 助手",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
         )
     }
 }

@@ -156,6 +156,8 @@ fun MessageList(
                 },
                 onOpenImage = { path -> viewingImage = path },
                 onOpenFile = onOpenFile,
+                onCopy = onCopy,
+                onRegenerate = onRegenerate,
             )
         }
         if (state.isStreaming) {
@@ -221,7 +223,7 @@ fun MessageList(
     }
 }
 
-/** 气泡容器配色：磨砂（半透明 + 发丝描边）/ 实底；图片背景时用可调不透明度保证可读。 */
+/** 气泡容器配色：kelivo 默认（用户主题色浅罩 / 助手无气泡）/ 磨砂 / 实底；图片背景时用可调不透明度保证可读。 */
 @Composable
 private fun bubbleContainer(
     bubbleStyle: BubbleStyle,
@@ -236,6 +238,11 @@ private fun bubbleContainer(
         else scheme.surface.copy(alpha = (bubbleAlpha * 0.95f).coerceIn(0.3f, 1f))
     }
     return when (bubbleStyle) {
+        BubbleStyle.NONE -> {
+            // kelivo 默认：用户 = primary 浅罩（浅色 8% / 深色 15%），助手无气泡
+            if (isUser) scheme.primary.copy(alpha = if (scheme.surface.luminance() < 0.5f) 0.15f else 0.08f)
+            else androidx.compose.ui.graphics.Color.Transparent
+        }
         BubbleStyle.FROSTED -> {
             val dark = scheme.surface.luminance() < 0.5f
             if (isUser) scheme.primaryContainer.copy(alpha = 0.78f)
@@ -260,106 +267,215 @@ fun MessageBubble(
     onLongPress: (Offset) -> Unit,
     onOpenImage: (String) -> Unit,
     onOpenFile: (AttachmentEntity) -> Unit,
+    onCopy: (String) -> Unit,
+    onRegenerate: () -> Unit,
 ) {
     val isUser = message.role == Role.USER
     val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.75f).dp
     val surfaces = MaterialTheme.appSurfaces
+    // kelivo 默认：助手消息无气泡直接铺满（图片背景时仍用衬底保证可读）
+    val assistantBare = bubbleStyle == BubbleStyle.NONE && !imageBackgroundActive
 
     Box(
         Modifier.fillMaxWidth(),
         contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
     ) {
         Column(horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
-            // 头部：用户名 / 时间戳（气泡外，kelivo 布局）
-            if (showTimestamp) {
-                Text(
-                    buildString {
-                        if (isUser && userName.isNotBlank()) append(userName); append("  ")
-                        append(TimeUtils.formatMessageTime(message.createdAt))
-                    }.trim(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    maxLines = 1,
+            if (isUser) {
+                // 用户头部：用户名 / 时间戳（气泡外）
+                if (showTimestamp) {
+                    Text(
+                        buildString {
+                            if (userName.isNotBlank()) append(userName); append("  ")
+                            append(TimeUtils.formatMessageTime(message.createdAt))
+                        }.trim(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            } else if (showTimestamp) {
+                // 助手头部（kelivo）：模型图标 + 模型名 + 时间
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                )
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                        modifier = Modifier.size(18.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Filled.Psychology,
+                                contentDescription = null,
+                                modifier = Modifier.size(11.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        buildString {
+                            append(message.model?.substringAfterLast('/')?.take(18).orEmpty().ifBlank { "AI" })
+                            append("  ·  ")
+                            append(TimeUtils.formatMessageTime(message.createdAt))
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        maxLines = 1,
+                    )
+                }
             }
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = bubbleContainer(bubbleStyle, isUser, imageBackgroundActive, bubbleAlpha),
-                border = if (bubbleStyle == BubbleStyle.FROSTED || imageBackgroundActive) {
-                    BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-                } else {
-                    null
-                },
-                modifier = Modifier
-                    .widthIn(max = maxBubbleWidth)
-                    .longPressAnchor(onLongPress),
-            ) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    if (isUser) {
-                        // 附件：图片缩略图（可预览）/ 文件 chip（带大小，系统查看器打开）
-                        MessageAttachments(
+
+            if (isUser || !assistantBare) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = bubbleContainer(bubbleStyle, isUser, imageBackgroundActive, bubbleAlpha),
+                    border = if (bubbleStyle == BubbleStyle.FROSTED || imageBackgroundActive) {
+                        BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+                    } else {
+                        null
+                    },
+                    modifier = Modifier
+                        .widthIn(max = if (isUser) maxBubbleWidth else androidx.compose.ui.unit.Dp.Unspecified)
+                        .longPressAnchor(onLongPress),
+                ) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        MessageBody(
+                            message = message,
+                            isUser = isUser,
                             attachments = attachments,
+                            isQueued = isQueued,
+                            collapseReasoning = collapseReasoning,
                             onOpenImage = onOpenImage,
                             onOpenFile = onOpenFile,
                         )
-                        if (message.content.isNotBlank()) {
-                            SelectionContainer {
-                                Text(message.content, style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                        if (isQueued) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(top = 4.dp),
-                            ) {
-                                Icon(
-                                    Icons.Filled.HourglassTop,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(12.dp),
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    "已排队 · 本轮回复后自动发送",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                                )
-                            }
-                        }
-                    } else {
-                        // 思考过程（历史消息）：折叠卡片
-                        message.reasoningContent?.takeIf { it.isNotBlank() }?.let { reasoning ->
-                            ReasoningCard(
-                                reasoning = reasoning,
-                                streaming = false,
-                                defaultCollapsed = collapseReasoning,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        MarkdownText(text = message.content)
                     }
+                }
+            } else {
+                // 助手无气泡：直接铺满，与两侧留 8dp 呼吸空间
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                        .longPressAnchor(onLongPress),
+                ) {
+                    MessageBody(
+                        message = message,
+                        isUser = false,
+                        attachments = attachments,
+                        isQueued = isQueued,
+                        collapseReasoning = collapseReasoning,
+                        onOpenImage = onOpenImage,
+                        onOpenFile = onOpenFile,
+                    )
                 }
             }
             if (!isUser) {
-                // Token 明细（估算标记 ≈）
+                // 助手尾部：完成后操作栏（复制 / 重新生成，仅最后一条）+ Token 明细（kelivo OverflowBar）
+                if (isLastAssistant && message.content.isNotBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 6.dp, top = 6.dp),
+                    ) {
+                        androidx.compose.material3.IconButton(
+                            onClick = { onCopy(message.content) },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.ContentCopy,
+                                contentDescription = "复制",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        androidx.compose.material3.IconButton(
+                            onClick = onRegenerate,
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = "重新生成",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
                 message.totalTokens?.let { total ->
                     Text(
                         text = buildString {
                             append("输入 ${message.promptTokens ?: 0} · 输出 ${message.completionTokens ?: 0} · 共 $total tokens")
                             if (message.usageSource == UsageSource.ESTIMATED) append("（≈ 估算）")
-                            append(" · ${message.model.orEmpty()}")
                             message.latencyMs?.let { append(" · %.1fs".format(it / 1000.0)) }
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 6.dp, top = 4.dp),
+                        modifier = Modifier.padding(start = 6.dp, top = 2.dp),
                     )
                 }
             }
         }
+    }
+}
+
+/** 消息正文（气泡内 / 无气泡铺满共用）：附件 / 排队标记 / 思考卡片 / Markdown。 */
+@Composable
+private fun MessageBody(
+    message: MessageEntity,
+    isUser: Boolean,
+    attachments: List<AttachmentEntity>,
+    isQueued: Boolean,
+    collapseReasoning: Boolean,
+    onOpenImage: (String) -> Unit,
+    onOpenFile: (AttachmentEntity) -> Unit,
+) {
+    if (isUser) {
+        // 附件：图片缩略图（可预览）/ 文件 chip（带大小，系统查看器打开）
+        MessageAttachments(
+            attachments = attachments,
+            onOpenImage = onOpenImage,
+            onOpenFile = onOpenFile,
+        )
+        if (message.content.isNotBlank()) {
+            SelectionContainer {
+                Text(message.content, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        if (isQueued) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                Icon(
+                    Icons.Filled.HourglassTop,
+                    contentDescription = null,
+                    modifier = Modifier.size(12.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "已排队 · 本轮回复后自动发送",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                )
+            }
+        }
+    } else {
+        // 思考过程（历史消息）：折叠卡片
+        message.reasoningContent?.takeIf { it.isNotBlank() }?.let { reasoning ->
+            ReasoningCard(
+                reasoning = reasoning,
+                streaming = false,
+                defaultCollapsed = collapseReasoning,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        MarkdownText(text = message.content)
     }
 }
 
@@ -777,44 +893,57 @@ fun SelectTextSheet(
     }
 }
 
-/** 流式中的助手消息：思考折叠卡 + 打字光标 + ≈ token。 */
+/** 流式中的助手消息：思考折叠卡 + 打字光标 + ≈ token（kelivo 默认风格下无气泡铺满）。 */
 @Composable
 fun StreamingBubble(state: ChatUiState) {
     val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.75f).dp
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = bubbleContainer(state.bubbleStyle, isUser = false, state.imageBackgroundActive, state.bubbleAlpha),
-        border = if (state.bubbleStyle == BubbleStyle.FROSTED) {
-            BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-        } else {
-            null
-        },
-        modifier = Modifier.widthIn(max = maxBubbleWidth),
-    ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            if (state.streamingReasoning.isNotBlank()) {
-                ReasoningCard(
-                    reasoning = state.streamingReasoning,
-                    streaming = state.streamingContent.isBlank(),
-                    defaultCollapsed = state.collapseReasoning,
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-            if (state.streamingContent.isNotBlank()) {
-                MarkdownText(text = state.streamingContent + " ▍")
-            } else if (state.streamingReasoning.isBlank()) {
-                Text(
-                    "正在输入…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                "≈ ${state.streamingEstimatedTokens} tokens · 生成中",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp),
+    val bare = state.bubbleStyle == BubbleStyle.NONE && !state.imageBackgroundActive
+
+    val body: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {
+        if (state.streamingReasoning.isNotBlank()) {
+            ReasoningCard(
+                reasoning = state.streamingReasoning,
+                streaming = state.streamingContent.isBlank(),
+                defaultCollapsed = state.collapseReasoning,
             )
+            Spacer(Modifier.height(8.dp))
+        }
+        if (state.streamingContent.isNotBlank()) {
+            MarkdownText(text = state.streamingContent + " ▍")
+        } else if (state.streamingReasoning.isBlank()) {
+            Text(
+                "正在输入…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            "≈ ${state.streamingEstimatedTokens} tokens · 生成中",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+    }
+
+    if (bare) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp),
+            content = body,
+        )
+    } else {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = bubbleContainer(state.bubbleStyle, isUser = false, state.imageBackgroundActive, state.bubbleAlpha),
+            border = if (state.bubbleStyle == BubbleStyle.FROSTED) {
+                BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+            } else {
+                null
+            },
+            modifier = Modifier.widthIn(max = maxBubbleWidth),
+        ) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), content = body)
         }
     }
 }
