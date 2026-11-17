@@ -5,6 +5,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -20,6 +23,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,9 +35,11 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Psychology
@@ -57,15 +64,25 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.ming.mchat.core.common.TimeUtils
+import com.ming.mchat.core.data.entity.AttachmentEntity
+import com.ming.mchat.core.data.entity.AttachmentKind
 import com.ming.mchat.core.data.entity.MessageEntity
 import com.ming.mchat.core.data.entity.Role
 import com.ming.mchat.core.data.entity.UsageSource
@@ -77,14 +94,17 @@ import com.ming.mchat.core.theme.MotionDurations
 import com.ming.mchat.core.theme.appSurfaces
 import com.ming.mchat.core.theme.longPressAnchor
 import com.ming.mchat.feature.chat.ChatUiState
+import java.io.File
 import kotlinx.coroutines.launch
 
 /**
  * 消息列表（kelivo 风格）：
- * - 用户消息：右侧气泡（最大 75% 屏宽），磨砂 / 实底两种风格；
+ * - 用户消息：右侧气泡（最大 75% 屏宽），磨砂 / 实底两种风格，附件图片缩略图 / 文件 chip 带大小；
  * - 助手消息：左侧气泡 + 思考折叠卡（animateContentSize 展开 / 收起）；
  * - 长按消息：以长按点为中心展开的锚点菜单（自适应上下方向）；
- * - 用户消息支持“编辑后重发”；最后一条助手消息支持“重新生成”。
+ * - 用户消息支持“编辑后重发”；最后一条助手消息支持“重新生成”；
+ * - 图片/文件点击预览（图片内建查看器，文件走系统查看器）；
+ * - 图片背景时气泡透明度可调（设置项），排队插话消息带标记。
  */
 @Composable
 fun MessageList(
@@ -94,6 +114,7 @@ fun MessageList(
     onDelete: (Long) -> Unit,
     onRegenerate: () -> Unit,
     onEditResend: (Long, String) -> Unit,
+    onOpenFile: (AttachmentEntity) -> Unit,
 ) {
     // 长按操作目标（锚点菜单 / 原格式抽屉 / 选择文本 / 编辑对话框）
     var actionTarget by rememberSaveable(state.conversationId) { mutableStateOf<Long?>(null) }
@@ -101,6 +122,7 @@ fun MessageList(
     var rawFormatTarget by rememberSaveable(state.conversationId) { mutableStateOf<Long?>(null) }
     var selectTarget by rememberSaveable(state.conversationId) { mutableStateOf<Long?>(null) }
     var editTarget by rememberSaveable(state.conversationId) { mutableStateOf<Long?>(null) }
+    var viewingImage by remember { mutableStateOf<String?>(null) }
 
     val messages = state.displayMessages
     val actionMessage = messages.firstOrNull { it.id == actionTarget }
@@ -124,10 +146,16 @@ fun MessageList(
                 bubbleStyle = state.bubbleStyle,
                 showTimestamp = state.showTimestamp,
                 userName = state.userName,
+                attachments = state.attachmentsByMessage[message.id].orEmpty(),
+                isQueued = message.id in state.queuedMessageIds,
+                imageBackgroundActive = state.imageBackgroundActive,
+                bubbleAlpha = state.bubbleAlpha,
                 onLongPress = { offset ->
                     actionTarget = message.id
                     actionPressOffset = offset
                 },
+                onOpenImage = { path -> viewingImage = path },
+                onOpenFile = onOpenFile,
             )
         }
         if (state.isStreaming) {
@@ -136,6 +164,13 @@ fun MessageList(
             }
         }
         item(key = "bottom_spacer") { Spacer(Modifier.height(4.dp)) }
+    }
+
+    viewingImage?.let { path ->
+        ImageViewerDialog(
+            imagePath = path,
+            onDismiss = { viewingImage = null },
+        )
     }
 
     // 长按锚点菜单：以长按点为中心，自适应上下展开
@@ -186,10 +221,20 @@ fun MessageList(
     }
 }
 
-/** 气泡容器配色：磨砂（半透明 + 发丝描边）/ 实底。 */
+/** 气泡容器配色：磨砂（半透明 + 发丝描边）/ 实底；图片背景时用可调不透明度保证可读。 */
 @Composable
-private fun bubbleContainer(bubbleStyle: BubbleStyle, isUser: Boolean): androidx.compose.ui.graphics.Color {
+private fun bubbleContainer(
+    bubbleStyle: BubbleStyle,
+    isUser: Boolean,
+    imageBackgroundActive: Boolean = false,
+    bubbleAlpha: Float = 0.92f,
+): androidx.compose.ui.graphics.Color {
     val scheme = MaterialTheme.colorScheme
+    if (imageBackgroundActive) {
+        // 图片背景：用户/助手均用高不透明度衬底（设置可调），避免裸字压图不可读
+        return if (isUser) scheme.primaryContainer.copy(alpha = bubbleAlpha)
+        else scheme.surface.copy(alpha = (bubbleAlpha * 0.95f).coerceIn(0.3f, 1f))
+    }
     return when (bubbleStyle) {
         BubbleStyle.FROSTED -> {
             val dark = scheme.surface.luminance() < 0.5f
@@ -208,7 +253,13 @@ fun MessageBubble(
     bubbleStyle: BubbleStyle,
     showTimestamp: Boolean,
     userName: String,
+    attachments: List<AttachmentEntity>,
+    isQueued: Boolean,
+    imageBackgroundActive: Boolean,
+    bubbleAlpha: Float,
     onLongPress: (Offset) -> Unit,
+    onOpenImage: (String) -> Unit,
+    onOpenFile: (AttachmentEntity) -> Unit,
 ) {
     val isUser = message.role == Role.USER
     val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.75f).dp
@@ -234,8 +285,8 @@ fun MessageBubble(
             }
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = bubbleContainer(bubbleStyle, isUser),
-                border = if (bubbleStyle == BubbleStyle.FROSTED) {
+                color = bubbleContainer(bubbleStyle, isUser, imageBackgroundActive, bubbleAlpha),
+                border = if (bubbleStyle == BubbleStyle.FROSTED || imageBackgroundActive) {
                     BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
                 } else {
                     null
@@ -246,8 +297,35 @@ fun MessageBubble(
             ) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     if (isUser) {
-                        SelectionContainer {
-                            Text(message.content, style = MaterialTheme.typography.bodyMedium)
+                        // 附件：图片缩略图（可预览）/ 文件 chip（带大小，系统查看器打开）
+                        MessageAttachments(
+                            attachments = attachments,
+                            onOpenImage = onOpenImage,
+                            onOpenFile = onOpenFile,
+                        )
+                        if (message.content.isNotBlank()) {
+                            SelectionContainer {
+                                Text(message.content, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                        if (isQueued) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = 4.dp),
+                            ) {
+                                Icon(
+                                    Icons.Filled.HourglassTop,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(12.dp),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    "已排队 · 本轮回复后自动发送",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                                )
+                            }
                         }
                     } else {
                         // 思考过程（历史消息）：折叠卡片
@@ -281,6 +359,171 @@ fun MessageBubble(
                     )
                 }
             }
+        }
+    }
+}
+
+/** 文件大小格式化：B / KB / MB / GB。 */
+fun formatFileSize(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> "%.1f GB".format(bytes / 1073741824.0)
+    bytes >= 1L shl 20 -> "%.1f MB".format(bytes / 1048576.0)
+    bytes >= 1L shl 10 -> "%.0f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
+}
+
+/**
+ * 消息内附件渲染：
+ * - 图片：一行多张圆角缩略图（最大 96dp），点击全屏预览；
+ * - 文件：图标 + 名称 + 大小 chip，点击系统查看器打开。
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun MessageAttachments(
+    attachments: List<AttachmentEntity>,
+    onOpenImage: (String) -> Unit,
+    onOpenFile: (AttachmentEntity) -> Unit,
+) {
+    if (attachments.isEmpty()) return
+    val images = attachments.filter { it.kind == AttachmentKind.IMAGE }
+    val files = attachments.filter { it.kind != AttachmentKind.IMAGE }
+
+    if (images.isNotEmpty()) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = if (files.isEmpty()) 6.dp else 4.dp),
+        ) {
+            items(images, key = { it.id }) { image ->
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(File(image.localPath))
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = image.displayName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(96.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .combinedClickable(onClick = { onOpenImage(image.localPath) }),
+                )
+            }
+        }
+    }
+    if (files.isNotEmpty()) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 6.dp),
+        ) {
+            files.forEach { file ->
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.72f),
+                    onClick = { onOpenFile(file) },
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Description,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.widthIn(max = 190.dp)) {
+                            Text(
+                                file.displayName,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                formatFileSize(file.sizeBytes),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 全屏图片查看器：双指缩放 / 拖动 / 双击放大 / 单击关闭。
+ */
+@Composable
+fun ImageViewerDialog(
+    imagePath: String,
+    onDismiss: () -> Unit,
+) {
+    var scale by remember { mutableStateOf(1f) }
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.92f))
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 5f)
+                        if (scale > 1f) {
+                            offsetX += pan.x
+                            offsetY += pan.y
+                        } else {
+                            offsetX = 0f
+                            offsetY = 0f
+                        }
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { onDismiss() },
+                        onDoubleTap = {
+                            if (scale > 1f) {
+                                scale = 1f; offsetX = 0f; offsetY = 0f
+                            } else {
+                                scale = 2.5f
+                            }
+                        },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(File(imagePath))
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offsetX,
+                        translationY = offsetY,
+                    ),
+            )
+            Text(
+                "双指缩放 · 单击关闭",
+                style = MaterialTheme.typography.labelSmall,
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 40.dp),
+            )
         }
     }
 }
@@ -540,7 +783,7 @@ fun StreamingBubble(state: ChatUiState) {
     val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.75f).dp
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = bubbleContainer(state.bubbleStyle, isUser = false),
+        color = bubbleContainer(state.bubbleStyle, isUser = false, state.imageBackgroundActive, state.bubbleAlpha),
         border = if (state.bubbleStyle == BubbleStyle.FROSTED) {
             BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
         } else {

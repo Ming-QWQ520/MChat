@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 附件私有目录（图片 / 文档预览） -->
+    <files-path name="attachments" path="attachments/" />
+    <!-- 聊天背景图 -->
+    <files-path name="backgrounds" path="backgrounds/" />
+</paths>

@@ -41,6 +41,16 @@ data class AppearanceSettings(
     val chatBackground: ChatBackground = ChatBackground.SOLID,
     /** 自定义聊天背景图：应用私有目录绝对路径；空表示未设置。 */
     val backgroundImageUri: String = "",
+    /** 背景图显示方式：false = 裁剪铺满（Crop），true = 适应宽度（16:9 图片避免过度裁剪）。 */
+    val bgFillWidth: Boolean = false,
+    /** 背景图高斯模糊（dp，0~24，Android 12+ 生效）。 */
+    val bgBlurDp: Int = 0,
+    /** 背景压暗程度（0~0.85），保证前景可读性。 */
+    val bgDim: Float = 0.45f,
+    /** 图片背景下聊天气泡不透明度（0.3~1）。 */
+    val bubbleAlpha: Float = 0.92f,
+    /** 图片背景下输入框不透明度（0.3~1）。 */
+    val inputAlpha: Float = 0.92f,
 )
 
 /** 模型行为设置。 */
@@ -54,6 +64,8 @@ data class ModelBehaviorSettings(
     val lowBalanceThreshold: Double = 5.0,
     /** 思考过程默认折叠显示（DeepSeek 手机端风格）；关闭后始终展开。 */
     val collapseReasoning: Boolean = true,
+    /** 低余额预警方式：默认颜色变红；弹窗提醒需手动开启。 */
+    val lowBalancePopupEnabled: Boolean = false,
 )
 
 /** 提示词与安全设置。 */
@@ -115,6 +127,11 @@ class SettingsRepository @Inject constructor(
             fontScale = (p[Keys.fontScale] ?: 1.0f).coerceIn(0.85f, 1.3f),
             chatBackground = enumOf(p[Keys.chatBackground], ChatBackground.SOLID),
             backgroundImageUri = p[Keys.backgroundImageUri] ?: "",
+            bgFillWidth = p[Keys.bgFillWidth] ?: false,
+            bgBlurDp = (p[Keys.bgBlurDp] ?: 0).coerceIn(0, 24),
+            bgDim = (p[Keys.bgDim] ?: 0.45f).coerceIn(0f, 0.85f),
+            bubbleAlpha = (p[Keys.bubbleAlpha] ?: 0.92f).coerceIn(0.3f, 1f),
+            inputAlpha = (p[Keys.inputAlpha] ?: 0.92f).coerceIn(0.3f, 1f),
         )
     }
 
@@ -128,6 +145,7 @@ class SettingsRepository @Inject constructor(
             outputTokenManualValue = p[Keys.outputTokenManualValue] ?: 2048,
             lowBalanceThreshold = p[Keys.lowBalanceThreshold] ?: 5.0,
             collapseReasoning = p[Keys.collapseReasoning] ?: true,
+            lowBalancePopupEnabled = p[Keys.lowBalancePopupEnabled] ?: false,
         )
     }
 
@@ -193,6 +211,11 @@ class SettingsRepository @Inject constructor(
             p[Keys.fontScale] = value.fontScale
             p[Keys.chatBackground] = value.chatBackground.name
             p[Keys.backgroundImageUri] = value.backgroundImageUri
+            p[Keys.bgFillWidth] = value.bgFillWidth
+            p[Keys.bgBlurDp] = value.bgBlurDp
+            p[Keys.bgDim] = value.bgDim
+            p[Keys.bubbleAlpha] = value.bubbleAlpha
+            p[Keys.inputAlpha] = value.inputAlpha
         }
     }
 
@@ -206,6 +229,7 @@ class SettingsRepository @Inject constructor(
             p[Keys.outputTokenManualValue] = value.outputTokenManualValue
             p[Keys.lowBalanceThreshold] = value.lowBalanceThreshold
             p[Keys.collapseReasoning] = value.collapseReasoning
+            p[Keys.lowBalancePopupEnabled] = value.lowBalancePopupEnabled
         }
     }
 
@@ -270,6 +294,13 @@ class SettingsRepository @Inject constructor(
         val outputTokenManualValue = intPreferencesKey("outputTokenManualValue")
         val lowBalanceThreshold = doublePreferencesKey("lowBalanceThreshold")
         val collapseReasoning = booleanPreferencesKey("collapseReasoning")
+        val lowBalancePopupEnabled = booleanPreferencesKey("lowBalancePopupEnabled")
+
+        val bgFillWidth = booleanPreferencesKey("bgFillWidth")
+        val bgBlurDp = intPreferencesKey("bgBlurDp")
+        val bgDim = floatPreferencesKey("bgDim")
+        val bubbleAlpha = floatPreferencesKey("bubbleAlpha")
+        val inputAlpha = floatPreferencesKey("inputAlpha")
 
         val defaultPresetId = longPreferencesKey("defaultPresetId")
         val appendGlobalSystemPrompt = booleanPreferencesKey("appendGlobalSystemPrompt")

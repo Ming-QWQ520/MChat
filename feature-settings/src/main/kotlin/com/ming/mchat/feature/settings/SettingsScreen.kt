@@ -67,6 +67,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -196,9 +197,11 @@ private fun SettingsHomePage(
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("设置") },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -268,9 +271,11 @@ private fun SettingsSubPage(
     content: @Composable () -> Unit,
 ) {
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text(title) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -386,6 +391,46 @@ private fun AppearanceSettingsPage(viewModel: SettingsViewModel) {
                             TextButton(onClick = viewModel::clearBackgroundImage) { Text("清除图片") }
                         }
                     }
+                }
+                // ---- 图片背景专属调整项 ----
+                LabeledSegmentedRow(
+                    label = "显示方式（16:9 图片可选适应宽度）",
+                    options = listOf("裁剪铺满", "适应宽度"),
+                    selectedIndex = if (appearance.bgFillWidth) 1 else 0,
+                ) { index ->
+                    viewModel.setAppearance(appearance.copy(bgFillWidth = index == 1))
+                }
+                SliderRow(
+                    label = "背景模糊（Android 12+）",
+                    value = appearance.bgBlurDp.toFloat(),
+                    valueRange = 0f..24f,
+                    format = { "${it.toInt()} dp" },
+                ) {
+                    viewModel.setAppearance(appearance.copy(bgBlurDp = it.toInt()))
+                }
+                SliderRow(
+                    label = "背景压暗",
+                    value = appearance.bgDim,
+                    valueRange = 0f..0.85f,
+                    format = { "${(it * 100).toInt()}%" },
+                ) {
+                    viewModel.setAppearance(appearance.copy(bgDim = it))
+                }
+                SliderRow(
+                    label = "聊天气泡不透明度",
+                    value = appearance.bubbleAlpha,
+                    valueRange = 0.3f..1f,
+                    format = { "${(it * 100).toInt()}%" },
+                ) {
+                    viewModel.setAppearance(appearance.copy(bubbleAlpha = it))
+                }
+                SliderRow(
+                    label = "输入框不透明度",
+                    value = appearance.inputAlpha,
+                    valueRange = 0.3f..1f,
+                    format = { "${(it * 100).toInt()}%" },
+                ) {
+                    viewModel.setAppearance(appearance.copy(inputAlpha = it))
                 }
             }
         }
@@ -604,12 +649,19 @@ private fun ModelsSettingsPage(viewModel: SettingsViewModel, onOpenProvider: (St
                 )
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            val balanceState = balance
             DeepSeekBalanceCard(
-                balance = balance,
+                balance = balanceState,
                 threshold = modelBehavior.lowBalanceThreshold,
+                lowBalance = balanceState != null && balanceState.error == null &&
+                    balanceState.totalBalance < modelBehavior.lowBalanceThreshold,
+                popupEnabled = modelBehavior.lowBalancePopupEnabled,
                 onRefresh = viewModel::refreshBalance,
                 onThresholdChange = {
                     viewModel.setModelBehavior(modelBehavior.copy(lowBalanceThreshold = it))
+                },
+                onPopupEnabledChange = {
+                    viewModel.setModelBehavior(modelBehavior.copy(lowBalancePopupEnabled = it))
                 },
             )
         }
@@ -1026,17 +1078,24 @@ private fun LabeledSegmentedRow(
     }
 }
 
-/** DeepSeek 余额卡片：大字余额 + 明细 + 手动刷新 + 低余额阈值。 */
+/** DeepSeek 余额卡片：大字余额（低余额变红）+ 明细 + 手动刷新 + 阈值 + 弹窗开关。 */
 @Composable
 private fun DeepSeekBalanceCard(
     balance: com.ming.mchat.core.llm.BalanceState?,
     threshold: Double,
+    lowBalance: Boolean,
+    popupEnabled: Boolean,
     onRefresh: () -> Unit,
     onThresholdChange: (Double) -> Unit,
+    onPopupEnabledChange: (Boolean) -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        color = if (lowBalance) {
+            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        },
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(14.dp)) {
@@ -1049,7 +1108,11 @@ private fun DeepSeekBalanceCard(
                     modifier = Modifier.size(18.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("DeepSeek 余额", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "DeepSeek 余额",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (lowBalance) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified,
+                )
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onRefresh) {
                     Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(14.dp)); Text("刷新")
@@ -1068,6 +1131,7 @@ private fun DeepSeekBalanceCard(
                             balance.totalBalance.toString(),
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
+                            color = if (lowBalance) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified,
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
@@ -1075,6 +1139,13 @@ private fun DeepSeekBalanceCard(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 5.dp),
+                        )
+                    }
+                    if (lowBalance) {
+                        Text(
+                            "余额低于阈值 $threshold，已在聊天页红色提示",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                     if (!balance.isAvailable) {
@@ -1100,6 +1171,9 @@ private fun DeepSeekBalanceCard(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             )
+            SwitchRow("低余额弹窗提醒（默认关闭，仅颜色变红）", popupEnabled) {
+                onPopupEnabledChange(it)
+            }
         }
     }
 }

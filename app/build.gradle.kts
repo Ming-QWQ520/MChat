@@ -101,6 +101,9 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.androidx.navigation.compose)
+
+    // 全局背景图渲染（AppBackground）与附件图片
+    implementation(libs.coil.compose)
     implementation(libs.hilt.navigation.compose)
 
     implementation(libs.hilt.android)

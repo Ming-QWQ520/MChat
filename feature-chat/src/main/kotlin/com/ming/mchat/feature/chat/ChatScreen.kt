@@ -1,5 +1,6 @@
 package com.ming.mchat.feature.chat
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -49,10 +50,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
@@ -66,8 +65,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
-import com.ming.mchat.core.common.ChatBackground
 import com.ming.mchat.core.data.entity.Role
 import com.ming.mchat.core.theme.AnchoredContextMenu
 import com.ming.mchat.core.theme.AnchoredMenuItem
@@ -102,6 +99,7 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val clipboard = LocalClipboardManager.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val glass = LocalLiquidGlass.current
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
@@ -222,48 +220,8 @@ fun ChatScreen(
             )
         },
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surface)
-        ) {
-                // 聊天背景：自定义图片 / 主题渐变 / 纯色
-                val backgroundImage = File(state.backgroundImageUri)
-                if (state.chatBackground == ChatBackground.IMAGE && state.backgroundImageUri.isNotBlank() && backgroundImage.exists()) {
-                    AsyncImage(
-                        model = backgroundImage,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.38f),
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                                    )
-                                )
-                            )
-                    )
-                } else if (state.chatBackground == ChatBackground.GRADIENT) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.surface,
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
-                                        MaterialTheme.colorScheme.surface,
-                                    )
-                                )
-                            )
-                    )
-                }
+        // 聊天背景（纯色/渐变/图片 + 调整项）由根层级 AppBackground 全局渲染，本层保持透明
+        Box(Modifier.fillMaxSize()) {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     containerColor = Color.Transparent,
@@ -369,6 +327,23 @@ fun ChatScreen(
                                 onDelete = viewModel::deleteMessage,
                                 onRegenerate = viewModel::regenerate,
                                 onEditResend = viewModel::editAndResend,
+                                onOpenFile = { attachment ->
+                                    runCatching {
+                                        val uri: android.net.Uri = androidx.core.content.FileProvider.getUriForFile(
+                                            context,
+                                            "${context.packageName}.fileprovider",
+                                            File(attachment.localPath),
+                                        )
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(uri, attachment.mimeType.ifBlank { "*/*" })
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            },
+                                        )
+                                    }.onFailure {
+                                        android.widget.Toast.makeText(context, "暂无应用可打开此文件", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
                             )
                         }
                         // 滚动导航按钮（不在底部时显示）
@@ -419,6 +394,27 @@ fun ChatScreen(
             onConfirm = { title ->
                 viewModel.renameConversation(state.conversationId, title)
                 showRename = false
+            },
+        )
+    }
+
+    // 低余额弹窗（可选）：设置中开启后，低余额首次检测到时弹出；取消后本次会话不再提示
+    var balancePopupDismissed by remember { mutableStateOf(false) }
+    if (state.isDeepSeek && state.lowBalance && state.lowBalancePopupEnabled && !balancePopupDismissed) {
+        AlertDialog(
+            onDismissRequest = { balancePopupDismissed = true },
+            title = { Text("余额较低") },
+            text = {
+                Text(
+                    "DeepSeek 当前余额 ${state.balance?.totalBalance ?: "?"} ${state.balance?.currency ?: "CNY"}，" +
+                        "低于预警阈值，建议关注用量或前往平台充值。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { balancePopupDismissed = true }) { Text("知道了") }
+            },
+            dismissButton = {
+                TextButton(onClick = { balancePopupDismissed = true }) { Text("取消") }
             },
         )
     }

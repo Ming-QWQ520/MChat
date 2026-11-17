@@ -110,6 +110,10 @@ class AttachmentRepository @Inject constructor(
     suspend fun attachmentsForMessage(messageId: Long): List<AttachmentEntity> =
         attachmentDao.getByMessage(messageId)
 
+    /** 会话内全部附件（消息内图片/文件渲染用）。 */
+    suspend fun attachmentsForConversation(conversationId: Long): List<AttachmentEntity> =
+        attachmentDao.getByConversation(conversationId)
+
     /** 图片转 data URL（IO 线程编码）。 */
     suspend fun toDataUrl(localPath: String, mimeType: String): String = withContext(Dispatchers.IO) {
         val bytes = File(localPath).readBytes()

@@ -137,8 +137,14 @@ class SettingsViewModel @Inject constructor(
 
     val balance: StateFlow<com.ming.mchat.core.llm.BalanceState?> = balanceService.state
 
-    private val _keyStatus = MutableStateFlow<Map<String, Boolean>>(emptyMap())
-    val apiKeyStatus: StateFlow<Map<String, Boolean>> = _keyStatus.asStateFlow()
+    /**
+     * API Key 状态（响应式）：provider_configs 表任何变动（含保存 Key 写入 apiKeyRef）
+     * 都会触发 Room Flow 重发，重新解密校验——保存后立即显示“已配置”。
+     */
+    val apiKeyStatus: StateFlow<Map<String, Boolean>> =
+        providerRepository.observeProviders()
+            .map { list -> list.associate { it.id to providerRepository.hasApiKey(it.id) } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
@@ -154,26 +160,6 @@ class SettingsViewModel @Inject constructor(
 
     val auxUsage: StateFlow<List<com.ming.mchat.core.data.entity.AuxUsageEntity>> =
         usageRepository.observeAuxRecent().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-
-    init {
-        // 修复：providers 为异步加载，首次列表到达 / 变化时重新检查每个供应商的 Key 状态，
-        // 避免设置页打开瞬间显示“API Key 未配置”的误报。
-        viewModelScope.launch {
-            providerRepository.observeProviders().collect {
-                val map = mutableMapOf<String, Boolean>()
-                it.forEach { provider -> map[provider.id] = providerRepository.hasApiKey(provider.id) }
-                _keyStatus.value = map
-            }
-        }
-    }
-
-    fun refreshKeyStatus() {
-        viewModelScope.launch {
-            val map = mutableMapOf<String, Boolean>()
-            providers.value.forEach { map[it.id] = providerRepository.hasApiKey(it.id) }
-            _keyStatus.value = map
-        }
-    }
 
     fun consumeMessage() {
         _message.value = null
@@ -260,7 +246,7 @@ class SettingsViewModel @Inject constructor(
     fun saveApiKey(providerId: String, key: String) {
         viewModelScope.launch {
             providerRepository.saveApiKey(providerId, key)
-            refreshKeyStatus()
+            // apiKeyStatus 为响应式 Flow（provider_configs 表变动自动刷新），无需手动刷新
             notify("API Key 已加密保存（Android Keystore）")
         }
     }

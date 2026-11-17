@@ -4,12 +4,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.ming.mchat.core.theme.GlassBackdropSource
 import com.ming.mchat.core.theme.MChatTheme
 import com.ming.mchat.navigation.MChatNavHost
+import com.ming.mchat.ui.AppBackground
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -30,7 +33,9 @@ class MainActivity : ComponentActivity() {
                 ),
                 fontScale = appearance.fontScale,
             ) {
-                GlassBackdropSource {
+                // 全局背景在根层级渲染：聊天 / 设置 / Provider 页面全部可见
+                Box(Modifier.fillMaxSize()) {
+                    AppBackground(appearance)
                     MChatNavHost()
                 }
             }

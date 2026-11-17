@@ -36,8 +36,9 @@ import java.time.format.DateTimeFormatter
 /**
  * 上下文环（输入框内，默认直径 30dp，可配置）：
  * - 环身 = 下一轮请求上下文占用 / contextWindow，随上下文增加而填充（圆形进度条）；
- * - 填充比例带平滑动画（400ms）；<80% 主题色，80~95% 橙色，>95% 红色；
- * - 环心：非 DeepSeek 显示占用百分比；DeepSeek 显示简短余额（>999 显示 1.2K）；
+ * 填充比例带平滑动画（400ms）；<80% 主题色，80~95% 橙色，>95% 红色；
+ * - 环心：上下文占用百分比（余额不再显示在环心，仅详情弹层可见）；
+ * - 低余额时环心数字变红（颜色预警，默认方式）；
  * - 点击展开浮层：上下文拆分 + DeepSeek 余额明细。
  */
 @Composable
@@ -45,8 +46,6 @@ fun ContextRing(
     usedTokens: Int,
     contextWindow: Int,
     estimated: Boolean,
-    balance: BalanceState?,
-    showBalance: Boolean,
     lowBalance: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -71,7 +70,7 @@ fun ContextRing(
         else -> scheme.primary
     }
     val trackColor = scheme.surfaceContainerHighest
-    val warning = showBalance && lowBalance
+    val warning = lowBalance
     val strokeWidth = with(density) { (diameter * 0.11f).toPx() }
     val centerFontSize = with(density) { (diameter * 0.26f).toSp() }
 
@@ -109,15 +108,7 @@ fun ContextRing(
                 )
             }
         }
-        val centerText = if (showBalance) {
-            when {
-                balance == null -> "--"
-                balance.error != null && balance.updatedAt == null -> "--"
-                else -> StringExt.shortenAmount(balance.totalBalance)
-            }
-        } else {
-            (if (estimated) "≈" else "") + "${(rawRatio * 100).toInt()}%"
-        }
+        val centerText = (if (estimated) "≈" else "") + "${(rawRatio * 100).toInt()}%"
         Text(
             text = centerText,
             fontSize = centerFontSize,

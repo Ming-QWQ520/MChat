@@ -73,6 +73,8 @@ data class ChatUiState(
     /** 用户已手动关闭低余额提示；余额数据刷新后若仍低则重新显示。 */
     val lowBalanceDismissed: Boolean = false,
     val balanceUpdatedStamp: Long? = null,
+    /** 低余额弹窗提醒（可选开关；默认仅颜色变红）。 */
+    val lowBalancePopupEnabled: Boolean = false,
     /** 思考过程默认折叠（设置可关）。 */
     val collapseReasoning: Boolean = true,
     val conversations: List<ConversationEntity> = emptyList(),
@@ -82,8 +84,16 @@ data class ChatUiState(
     val error: String? = null,
     val chatBackground: ChatBackground = ChatBackground.SOLID,
     val backgroundImageUri: String = "",
+    /** 图片背景生效时为 true，气泡/输入区启用可调透明度。 */
+    val imageBackgroundActive: Boolean = false,
+    val bubbleAlpha: Float = 0.92f,
+    val inputAlpha: Float = 0.92f,
     val providers: List<ProviderConfigEntity> = emptyList(),
     val modelsByProvider: Map<String, List<ModelConfigEntity>> = emptyMap(),
+    /** 消息附件（messageId → 附件列表），消息内渲染图片/文件。 */
+    val attachmentsByMessage: Map<Long, List<com.ming.mchat.core.data.entity.AttachmentEntity>> = emptyMap(),
+    /** 生成中排队的用户消息 id（DSH-Go 式插话：本轮结束后自动发送）。 */
+    val queuedMessageIds: Set<Long> = emptySet(),
     /** 临时对话（kelivo：不落库，退出即焚）。 */
     val isTemporary: Boolean = false,
     /** 临时对话的内存消息（id 为负数，避免与数据库 id 冲突）。 */
@@ -198,13 +208,20 @@ class ChatViewModel @Inject constructor(
                 }
             }
         }
-        // 外观：聊天背景（纯色/主题渐变/自定义图片）
+        // 外观：聊天背景 / 图片背景透明度 / 低余额弹窗开关
         viewModelScope.launch {
-            settingsRepository.appearance.collect { appearance ->
+            combine(settingsRepository.appearance, settingsRepository.modelBehavior) { appearance, behavior ->
+                appearance to behavior
+            }.collect { (appearance, behavior) ->
                 _uiState.update {
                     it.copy(
                         chatBackground = appearance.chatBackground,
                         backgroundImageUri = appearance.backgroundImageUri,
+                        imageBackgroundActive = appearance.chatBackground == ChatBackground.IMAGE &&
+                            appearance.backgroundImageUri.isNotBlank(),
+                        bubbleAlpha = appearance.bubbleAlpha,
+                        inputAlpha = appearance.inputAlpha,
+                        lowBalancePopupEnabled = behavior.lowBalancePopupEnabled,
                     )
                 }
             }
@@ -263,9 +280,9 @@ class ChatViewModel @Inject constructor(
 
     fun send() {
         val state = _uiState.value
-        if (state.isStreaming) return
         val text = state.input.trim()
         if (text.isEmpty() && state.pendingAttachments.isEmpty()) return
+        if (state.confirmInjection) return
         viewModelScope.launch {
             val injectionEnabled = settingsRepository.promptSafety.first().injectionScanEnabled
             if (injectionEnabled) {
@@ -279,7 +296,12 @@ class ChatViewModel @Inject constructor(
                     return@launch
                 }
             }
-            performSend(text)
+            if (state.isStreaming) {
+                // DSH-Go 式插话：生成中入队，本轮回复完成后自动发送
+                enqueueUserMessage(text)
+            } else {
+                performSend(text)
+            }
         }
     }
 
@@ -287,16 +309,64 @@ class ChatViewModel @Inject constructor(
     fun confirmInjectionSend() {
         _uiState.update { it.copy(confirmInjection = false, injectionWarnings = emptyList()) }
         val text = _uiState.value.input.trim()
-        viewModelScope.launch { performSend(text) }
+        viewModelScope.launch {
+            if (_uiState.value.isStreaming) {
+                enqueueUserMessage(text)
+            } else {
+                performSend(text)
+            }
+        }
     }
 
     fun dismissInjectionWarning() {
         _uiState.update { it.copy(confirmInjection = false, injectionWarnings = emptyList()) }
     }
 
+    /** 生成中插话：先落库立即可见，标记排队，本轮结束后自动发送。 */
+    private suspend fun enqueueUserMessage(text: String) {
+        val snapshot = _uiState.value
+        val conversationId = snapshot.conversationId.takeIf { it != 0L } ?: return
+        val userId = messageRepository.insert(
+            MessageEntity(
+                conversationId = conversationId,
+                role = Role.USER,
+                content = text,
+                createdAt = System.currentTimeMillis(),
+            )
+        )
+        attachmentRepository.bindToMessage(userId, snapshot.pendingAttachments)
+
+        // 首条用户消息：AUTO_TRUNCATE 兜底标题
+        if (messageRepository.countByRole(conversationId, Role.USER) == 1) {
+            conversationRepository.setAutoTruncateTitle(
+                conversationId,
+                StringExt.truncateTitle(text.ifBlank { snapshot.pendingAttachments.firstOrNull()?.displayName ?: "新对话" }),
+            )
+        }
+        _uiState.update {
+            it.copy(
+                input = "",
+                pendingAttachments = emptyList(),
+                queuedMessageIds = it.queuedMessageIds + userId,
+            )
+        }
+    }
+
+    /** 排队消息出队：取最早排队的一条自动发送。 */
+    private fun drainQueuedMessages() {
+        val state = _uiState.value
+        if (state.isStreaming || state.conversationId == 0L) return
+        val next = state.queuedMessageIds.minOrNull() ?: return
+        _uiState.update { it.copy(queuedMessageIds = it.queuedMessageIds - next) }
+        launchStream(state.conversationId, next, temporary = false)
+    }
+
     private suspend fun performSend(text: String) {
         val snapshot = _uiState.value
-        if (snapshot.isStreaming) return
+        if (snapshot.isStreaming) {
+            enqueueUserMessage(text)
+            return
+        }
 
         // 临时对话：不落库，内存消息 + 直接流式
         if (snapshot.isTemporary) {
@@ -383,12 +453,23 @@ class ChatViewModel @Inject constructor(
             val provider = providerRepository.getProvider(state.providerId)
             val model = providerRepository.getModel(state.providerId, state.modelId)
             if (provider == null || !provider.enabled || model == null || !model.enabled) {
-                _uiState.update { it.copy(error = "当前 Provider 或模型不可用，请在抽屉中重新选择模型") }
+                _uiState.update {
+                    it.copy(
+                        error = "当前 Provider 或模型不可用，请在抽屉中重新选择模型",
+                        // 早退错误：清空排队标记，避免消息永远停留在“已排队”状态
+                        queuedMessageIds = emptySet(),
+                    )
+                }
                 return@launch
             }
             val token = providerRepository.readApiKey(provider.id)
             if (token.isNullOrBlank()) {
-                _uiState.update { it.copy(error = "尚未配置 ${provider.displayName} 的 API Key，请到设置 → 模型与 Provider 中填写") }
+                _uiState.update {
+                    it.copy(
+                        error = "尚未配置 ${provider.displayName} 的 API Key，请到设置 → 模型与 Provider 中填写",
+                        queuedMessageIds = emptySet(),
+                    )
+                }
                 return@launch
             }
 
@@ -471,6 +552,7 @@ class ChatViewModel @Inject constructor(
             val reasoningBuilder = StringBuilder()
             var serverUsage: LlmStreamEvent.Usage? = null
             var finishReason: String? = null
+            var streamError = false
             // 增量估算：只对每个 delta 做廉价字符近似，避免逐 token 全量重算（O(n²)）
             var streamingTokens = 0
 
@@ -503,6 +585,7 @@ class ChatViewModel @Inject constructor(
                         is LlmStreamEvent.Usage -> serverUsage = event
                         is LlmStreamEvent.Done -> finishReason = event.finishReason
                         is LlmStreamEvent.Error -> {
+                            streamError = true
                             _uiState.update { state ->
                                 state.copy(
                                     error = buildString {
@@ -545,6 +628,10 @@ class ChatViewModel @Inject constructor(
                     }
                 }
                 _uiState.update { it.copy(isStreaming = false, streamingContent = "", streamingReasoning = "", streamingEstimatedTokens = 0) }
+                // 停止后若还有排队消息，继续发送下一条
+                if (_uiState.value.queuedMessageIds.isNotEmpty()) {
+                    viewModelScope.launch { drainQueuedMessages() }
+                }
                 throw c
             }
 
@@ -572,6 +659,18 @@ class ChatViewModel @Inject constructor(
                 )
             }
             _uiState.update { it.copy(isStreaming = false, streamingContent = "", streamingReasoning = "", streamingEstimatedTokens = 0) }
+
+            // 请求出错：清空排队标记，等待用户手动重发（避免连续报错轰炸）
+            if (streamError) {
+                _uiState.update { it.copy(queuedMessageIds = emptySet()) }
+                return@launch
+            }
+
+            // 排队的插话消息自动发送（DSH-Go 式队列）
+            if (_uiState.value.queuedMessageIds.isNotEmpty()) {
+                drainQueuedMessages()
+                return@launch
+            }
 
             // 首轮结束后异步生成标题；DeepSeek 刷新余额（临时模式不生成标题）
             if (!temporary) {
@@ -684,6 +783,11 @@ class ChatViewModel @Inject constructor(
         messagesJob = viewModelScope.launch {
             messageRepository.observeByConversation(conversationId).collect { list ->
                 _uiState.update { it.copy(messages = list) }
+                // 同步拉取消息附件（messageId → attachments），消息内渲染图片/文件
+                val attachments = attachmentRepository.attachmentsForConversation(conversationId)
+                _uiState.update {
+                    it.copy(attachmentsByMessage = attachments.groupBy { att -> att.messageId })
+                }
             }
         }
     }
@@ -709,6 +813,8 @@ class ChatViewModel @Inject constructor(
                     streamingContent = "",
                     streamingReasoning = "",
                     streamingEstimatedTokens = 0,
+                    attachmentsByMessage = emptyMap(),
+                    queuedMessageIds = emptySet(),
                     providerId = behavior.defaultProviderId,
                     modelId = defaultModel?.modelId ?: behavior.defaultModelId,
                     modelDisplayName = defaultModel?.displayName ?: behavior.defaultModelId,
@@ -737,6 +843,8 @@ class ChatViewModel @Inject constructor(
                     contextWindow = model?.contextTokens ?: 32768,
                     input = "",
                     pendingAttachments = emptyList(),
+                    attachmentsByMessage = emptyMap(),
+                    queuedMessageIds = emptySet(),
                 )
             }
             refreshContextUsage(id)

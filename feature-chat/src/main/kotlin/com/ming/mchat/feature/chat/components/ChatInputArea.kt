@@ -93,6 +93,7 @@ fun ChatBottomArea(
 ) {
     val containerShape = RoundedCornerShape(28.dp)
     var showQuickPhrases by remember { mutableStateOf(false) }
+    val containerAlpha = if (state.imageBackgroundActive) state.inputAlpha else 1f
     val containerModifier = Modifier
         .fillMaxWidth()
         .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -193,6 +194,18 @@ fun ChatBottomArea(
                     ),
                 )
                 if (state.isStreaming) {
+                    // DSH-Go 式插话：生成中可继续输入；有内容时显示发送（排队），同时保留停止按钮
+                    if (state.input.isNotBlank() || state.pendingAttachments.isNotEmpty()) {
+                        FilledIconButton(
+                            onClick = onSend,
+                            modifier = Modifier
+                                .padding(start = 4.dp, bottom = 4.dp)
+                                .size(40.dp),
+                            shape = CircleShape,
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "排队发送")
+                        }
+                    }
                     FilledIconButton(
                         onClick = onStop,
                         modifier = Modifier
@@ -250,9 +263,7 @@ fun ChatBottomArea(
                     usedTokens = state.usedPromptTokens,
                     contextWindow = state.contextWindow,
                     estimated = state.contextEstimated,
-                    balance = state.balance,
-                    showBalance = state.isDeepSeek,
-                    lowBalance = state.lowBalance,
+                    lowBalance = state.lowBalance && state.isDeepSeek,
                     onClick = onContextRingClick,
                     diameter = 30.dp,
                 )
@@ -275,13 +286,14 @@ fun ChatBottomArea(
             com.ming.mchat.core.theme.LiquidGlassSurface(
                 modifier = containerModifier,
                 shape = containerShape,
+                alpha = containerAlpha,
                 content = content,
             )
         } else {
             Surface(
                 modifier = containerModifier,
                 shape = containerShape,
-                color = MaterialTheme.appSurfaces.card,
+                color = MaterialTheme.appSurfaces.card.copy(alpha = containerAlpha),
                 border = BorderStroke(0.5.dp, MaterialTheme.appSurfaces.hairline),
                 content = content,
             )
@@ -449,7 +461,7 @@ private fun ThinkingEffortPill(
     }
 }
 
-/** 附件缩略图条：可删除，显示估算 token。 */
+/** 附件缩略图条：可删除，显示文件大小与估算 token。 */
 @Composable
 private fun AttachmentStrip(
     attachments: List<PendingAttachment>,
@@ -495,6 +507,11 @@ private fun AttachmentStrip(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.width(88.dp),
+                            )
+                            Text(
+                                formatFileSize(attachment.sizeBytes),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
                                 "≈ ${attachment.estimatedTokens} tk",
