@@ -2,8 +2,8 @@ package com.ming.mchat.core.theme
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
@@ -44,8 +44,8 @@ fun deriveAppSurfaces(scheme: androidx.compose.material3.ColorScheme): AppSurfac
     )
 }
 
-/** 全局语义表面 CompositionLocal（由 MChatTheme 提供）。 */
-val LocalAppSurfaces = staticCompositionLocalOf {
+/** 全局语义表面 CompositionLocal（由 MChatTheme 提供）；非 static：主题切换时读取处同步重组。 */
+val LocalAppSurfaces = compositionLocalOf {
     AppSurfaces(Color.Unspecified, Color.Unspecified, Color.Unspecified, Color.Unspecified, Color.Unspecified)
 }
 

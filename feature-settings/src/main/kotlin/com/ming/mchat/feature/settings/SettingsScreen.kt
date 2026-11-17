@@ -3,7 +3,6 @@
 package com.ming.mchat.feature.settings
 
 import android.content.Intent
-import androidx.compose.animation.togetherWith
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -105,74 +104,59 @@ import com.ming.mchat.core.theme.appSurfaces
 import java.io.File
 
 /**
- * 设置主页（kelivo iOS 风格）：
- * - 分组卡片 + iOS 导航行（36dp 图标槽 / 15sp 标签 / chevron）；
- * - 二级页面内推（slide + fade，AnimatedContent），全部设置项分拆到子页；
+ * 设置页（kelivo iOS 风格）：
+ * - 主页：分组卡片 + iOS 导航行（36dp 图标槽 / 15sp 标签 / chevron）；
+ * - 子页路由化：subpage 由 NavHost 路由参数驱动（settings?subpage=xxx），
+ *   每个子页独立返回栈条目，返回键逐层回退，彻底隔离状态；
  * - 液态玻璃开启时分组卡片使用 LiquidGlassSurface。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    subpage: String,
     onBack: () -> Unit,
+    onOpenSubPage: (String) -> Unit,
     onOpenProvider: (String) -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    var page by remember { mutableStateOf<String?>(null) }
-
-    androidx.compose.animation.AnimatedContent(
-        targetState = page,
-        transitionSpec = {
-            if (targetState != null) {
-                (androidx.compose.animation.slideInHorizontally { it } + androidx.compose.animation.fadeIn()).togetherWith(
-                    androidx.compose.animation.slideOutHorizontally { -it / 3 } + androidx.compose.animation.fadeOut(),
-                )
-            } else {
-                (androidx.compose.animation.slideInHorizontally { -it / 3 } + androidx.compose.animation.fadeIn()).togetherWith(
-                    androidx.compose.animation.slideOutHorizontally { it } + androidx.compose.animation.fadeOut(),
-                )
-            }
-        },
-        label = "settingsPage",
-    ) { current ->
-        when (current) {
-            "appearance" -> SettingsSubPage(title = "主题与外观", onBack = { page = null }) {
-                AppearanceSettingsPage(viewModel)
-            }
-            "profile" -> SettingsSubPage(title = "用户资料", onBack = { page = null }) {
-                ProfileSettingsPage(viewModel)
-            }
-            "chatDisplay" -> SettingsSubPage(title = "聊天显示", onBack = { page = null }) {
-                ChatDisplaySettingsPage(viewModel)
-            }
-            "models" -> SettingsSubPage(title = "模型与 Provider", onBack = { page = null }) {
-                ModelsSettingsPage(viewModel, onOpenProvider)
-            }
-            "title" -> SettingsSubPage(title = "会话与标题", onBack = { page = null }) {
-                TitleSettingsPage(viewModel)
-            }
-            "attachment" -> SettingsSubPage(title = "附件", onBack = { page = null }) {
-                AttachmentSettingsPage(viewModel)
-            }
-            "prompt" -> SettingsSubPage(title = "提示词预设", onBack = { page = null }) {
-                PromptSettingsPage(viewModel)
-            }
-            "quickPhrases" -> SettingsSubPage(title = "快捷短语", onBack = { page = null }) {
-                QuickPhrasesSettingsPage(viewModel)
-            }
-            "usage" -> SettingsSubPage(title = "用量统计", onBack = { page = null }) {
-                UsageSettingsPage(viewModel)
-            }
-            "data" -> SettingsSubPage(title = "数据管理", onBack = { page = null }) {
-                DataSettingsPage(viewModel)
-            }
-            "security" -> SettingsSubPage(title = "安全与隐私", onBack = { page = null }) {
-                SecuritySettingsPage(viewModel)
-            }
-            "about" -> SettingsSubPage(title = "关于", onBack = { page = null }) {
-                AboutSettingsPage()
-            }
-            else -> SettingsHomePage(onBack = onBack, viewModel = viewModel) { page = it }
+    when (subpage) {
+        "appearance" -> SettingsSubPage(title = "主题与外观", onBack = onBack) {
+            AppearanceSettingsPage(viewModel)
         }
+        "profile" -> SettingsSubPage(title = "用户资料", onBack = onBack) {
+            ProfileSettingsPage(viewModel)
+        }
+        "chatDisplay" -> SettingsSubPage(title = "聊天显示", onBack = onBack) {
+            ChatDisplaySettingsPage(viewModel)
+        }
+        "models" -> SettingsSubPage(title = "模型与 Provider", onBack = onBack) {
+            ModelsSettingsPage(viewModel, onOpenProvider)
+        }
+        "title" -> SettingsSubPage(title = "会话与标题", onBack = onBack) {
+            TitleSettingsPage(viewModel)
+        }
+        "attachment" -> SettingsSubPage(title = "附件", onBack = onBack) {
+            AttachmentSettingsPage(viewModel)
+        }
+        "prompt" -> SettingsSubPage(title = "提示词预设", onBack = onBack) {
+            PromptSettingsPage(viewModel)
+        }
+        "quickPhrases" -> SettingsSubPage(title = "快捷短语", onBack = onBack) {
+            QuickPhrasesSettingsPage(viewModel)
+        }
+        "usage" -> SettingsSubPage(title = "用量统计", onBack = onBack) {
+            UsageSettingsPage(viewModel)
+        }
+        "data" -> SettingsSubPage(title = "数据管理", onBack = onBack) {
+            DataSettingsPage(viewModel)
+        }
+        "security" -> SettingsSubPage(title = "安全与隐私", onBack = onBack) {
+            SecuritySettingsPage(viewModel)
+        }
+        "about" -> SettingsSubPage(title = "关于", onBack = onBack) {
+            AboutSettingsPage()
+        }
+        else -> SettingsHomePage(onBack = onBack, viewModel = viewModel, onOpenPage = onOpenSubPage)
     }
 }
 

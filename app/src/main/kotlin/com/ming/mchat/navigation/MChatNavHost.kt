@@ -28,11 +28,21 @@ private fun exitAnim(): ExitTransition = slideOutHorizontally(
     animationSpec = tween(280, easing = MotionCurves.EaseInCubic),
 ) { it } + fadeOut(tween(200))
 
+/** 设置子页返回主页：主页从左侧 1/3 位移滑回 + 淡入（iOS 后退现层）。 */
+private fun settingsPopEnter(): EnterTransition = slideInHorizontally(
+    animationSpec = tween(320, easing = MotionCurves.EaseOutCubic),
+) { -it / 3 } + fadeIn(tween(220))
+
 /** 底层页面淡出 / 淡入（不位移，避免抽屉式层级跳变）。 */
 private fun underlyingFadeIn(): EnterTransition = fadeIn(tween(220))
 private fun underlyingFadeOut(): ExitTransition = fadeOut(tween(180))
 
-/** 全局导航：聊天（起点）→ 设置 → 供应商新建 / 编辑；设置层级统一左滑进 / 右滑出。 */
+/**
+ * 全局导航：聊天（起点）→ 设置（主页 / 子页统一路由）→ 供应商新建 / 编辑。
+ * 设置子页路由化（对齐 kelivo Navigator 体系）：每个子页独立 NavBackStackEntry，
+ * 状态完全隔离 —— 彻底杜绝“进入设置误跳子页”的状态残留 / 点击穿透问题；
+ * 返回键天然逐层回退（子页 → 设置主页 → 聊天）。
+ */
 @Composable
 fun MChatNavHost() {
     val navController = rememberNavController()
@@ -51,15 +61,27 @@ fun MChatNavHost() {
                 onOpenSettings = { navController.navigate("settings") { launchSingleTop = true } },
             )
         }
+        // 设置主页与全部子页：settings?subpage=xxx；无参即主页
         composable(
-            route = "settings",
+            route = "settings?subpage={subpage}",
+            arguments = listOf(
+                navArgument("subpage") {
+                    type = NavType.StringType
+                    defaultValue = "home"
+                },
+            ),
             enterTransition = { enterAnim() },
             exitTransition = { underlyingFadeOut() },
-            popEnterTransition = { underlyingFadeIn() },
+            popEnterTransition = { settingsPopEnter() },
             popExitTransition = { exitAnim() },
-        ) {
+        ) { backStackEntry ->
+            val subpage = backStackEntry.arguments?.getString("subpage") ?: "home"
             SettingsScreen(
+                subpage = subpage,
                 onBack = { navController.popBackStack() },
+                onOpenSubPage = { page ->
+                    navController.navigate("settings?subpage=$page")
+                },
                 onOpenProvider = { providerId -> navController.navigate("provider/$providerId") { launchSingleTop = true } },
             )
         }

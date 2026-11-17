@@ -11,7 +11,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -110,8 +110,9 @@ private val KelivoDark = darkColorScheme(
 /**
  * 应用内深色状态（跟随应用主题设置，而非系统）：
  * 图片背景 scrim、代码块配色等必须读取本值，保证“应用深色 + 系统浅色”时全屏自适应。
+ * 非 static：深浅切换时读取处同步重组。
  */
-val LocalIsAppDarkTheme = staticCompositionLocalOf { false }
+val LocalIsAppDarkTheme = compositionLocalOf { false }
 
 /**
  * MChat 主题：
@@ -145,22 +146,25 @@ fun MChatTheme(
         darkTheme -> KelivoDark
         else -> KelivoLight
     }
-    val surfaces = rememberAppSurfaces()
-
     val density = LocalDensity.current
     val scaledDensity = Density(density.density, density.fontScale * fontScale.coerceIn(0.85f, 1.3f))
 
-    CompositionLocalProvider(
-        LocalLiquidGlass provides liquidGlass,
-        LocalAppSurfaces provides surfaces,
-        LocalIsAppDarkTheme provides darkTheme,
-        LocalDensity provides scaledDensity,
+    // 注意嵌套顺序：必须先 MaterialTheme(colorScheme) 提供本层配色，
+    // 再在内层派生 appSurfaces —— 否则 rememberAppSurfaces 读到的是外层
+    // （Activity 默认浅色）colorScheme，深色模式下输入区 / 卡片会恒为白色。
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = MChatTypography,
     ) {
-        MaterialTheme(
-            colorScheme = colorScheme,
-            typography = MChatTypography,
-            content = content,
-        )
+        val surfaces = rememberAppSurfaces()
+        CompositionLocalProvider(
+            LocalLiquidGlass provides liquidGlass,
+            LocalAppSurfaces provides surfaces,
+            LocalIsAppDarkTheme provides darkTheme,
+            LocalDensity provides scaledDensity,
+        ) {
+            content()
+        }
     }
 }
 

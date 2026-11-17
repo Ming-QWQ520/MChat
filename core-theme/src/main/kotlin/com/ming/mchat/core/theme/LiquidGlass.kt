@@ -9,8 +9,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -33,7 +33,7 @@ data class LiquidGlassParams(
     val reduceMotion: Boolean = false,
 )
 
-val LocalLiquidGlass = staticCompositionLocalOf { LiquidGlassParams() }
+val LocalLiquidGlass = compositionLocalOf { LiquidGlassParams() }
 
 /**
  * 自研液态玻璃视觉层（MChat Glass v2，纯 Compose 绘制，零第三方库依赖）：
